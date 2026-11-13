@@ -1,0 +1,19 @@
+# ocr-bridge review Job.
+#
+# Runs `ocr review` against a PR checkout and posts the findings back. Pin
+# OCR_VERSION and the image tag together; the CLI is an npm package.
+FROM node:24.22.1-bookworm-slim
+
+ARG OCR_VERSION=1.13.8
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g "@alibaba-group/open-code-review@${OCR_VERSION}" \
+ && npm cache clean --force
+
+COPY src/run-review.sh /usr/local/bin/run-review.sh
+COPY src/post-review.mjs /usr/local/bin/post-review.mjs
+RUN chmod +x /usr/local/bin/run-review.sh
+
+ENTRYPOINT ["/usr/local/bin/run-review.sh"]

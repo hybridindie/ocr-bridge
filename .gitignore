@@ -1,0 +1,7 @@
+node_modules/
+.env
+.env.*
+*.pem
+secrets.yaml
+values.local.yaml
+.DS_Store

@@ -1,0 +1,39 @@
+{{- if .Values.receiver.serviceAccount.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "ocr-bridge.fullname" . }}
+  labels:
+    {{- include "ocr-bridge.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "ocr-bridge.fullname" . }}
+  labels:
+    {{- include "ocr-bridge.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "ocr-bridge.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ocr-bridge.receiverServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+---
+# Review Jobs need no Kubernetes API access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "ocr-bridge.jobServiceAccountName" . }}
+  labels:
+    {{- include "ocr-bridge.labels" . | nindent 4 }}
+automountServiceAccountToken: false

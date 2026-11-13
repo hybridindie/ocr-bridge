@@ -1,0 +1,15 @@
+ocr-bridge {{ .Chart.AppVersion }} is installed.
+
+Receiver service (in-cluster):
+  http://{{ include "ocr-bridge.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook
+
+Webhook setup:
+  - GitHub App: set the webhook URL to the receiver's public /webhook,
+    content type application/json, and subscribe to Pull request + Issue comment.
+  - Gitea: add a repo webhook to the same URL with events
+    pull_request, pull_request_sync, issue_comment and the secret from the
+    ocr-gitea Secret.
+
+Providers enabled: {{ include "ocr-bridge.providers" . }}
+
+Metrics: /metrics (enable podMonitor.enabled for Prometheus Operator).

@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ocr-bridge.fullname" . }}
+  labels:
+    {{- include "ocr-bridge.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.receiver.port | quote }}
+  OCR_NAMESPACE: {{ .Release.Namespace | quote }}
+  OCR_JOB_IMAGE: {{ printf "%s:%s" .Values.image.job.repository .Values.image.job.tag | quote }}
+  OCR_JOB_SERVICE_ACCOUNT: {{ include "ocr-bridge.jobServiceAccountName" . | quote }}
+  OCR_JOB_DEADLINE_SECONDS: {{ .Values.job.deadlineSeconds | quote }}
+  OCR_LLM_URL: {{ .Values.llm.url | quote }}
+  OCR_LLM_MODEL: {{ .Values.llm.model | quote }}
+  OCR_LLM_FALLBACK_MODEL: {{ .Values.llm.fallbackModel | quote }}
+  OCR_LLM_SECRET_NAME: {{ .Values.llm.existingSecret | quote }}
+  OCR_LLM_SECRET_KEY: {{ .Values.llm.secretKey | quote }}
+  OCR_LLM_PROTOCOL: {{ .Values.llm.protocol | quote }}
+  OCR_USE_ANTHROPIC: {{ .Values.llm.useAnthropic | quote }}
+  OCR_LLM_TIMEOUT: {{ .Values.llm.timeout | quote }}
+  OCR_LLM_EXTRA_BODY: {{ .Values.llm.extraBody | quote }}
+  OCR_MAX_NITS: {{ .Values.policy.maxNits | quote }}
+  OCR_INCREMENTAL: {{ .Values.policy.incremental | quote }}
+  OCR_CONCURRENCY: {{ .Values.policy.concurrency | quote }}
+  OCR_LANGUAGE: {{ .Values.policy.language | quote }}
+  OCR_COMMANDS: {{ .Values.policy.commands | quote }}
+  OCR_ALLOWED_ASSOCIATIONS: {{ .Values.policy.allowedAssociations | quote }}
+  OCR_PROVIDERS: {{ include "ocr-bridge.providers" . | quote }}
+  OCR_RECEIVER_URL: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "ocr-bridge.fullname" .) .Release.Namespace .Values.receiver.port | quote }}
+  GITEA_API_URL: {{ .Values.providers.gitea.apiUrl | quote }}
+  GITEA_WEB_URL: {{ .Values.providers.gitea.webUrl | quote }}
+  GITEA_BOT_LOGIN: {{ .Values.providers.gitea.botLogin | quote }}

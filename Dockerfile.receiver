@@ -1,0 +1,13 @@
+# ocr-bridge webhook receiver.
+#
+# Node stdlib only. The service-account CA is mounted by Kubernetes; point
+# NODE_EXTRA_CA_CERTS at it so the in-cluster API is trusted.
+FROM node:24.22.1-bookworm-slim
+
+WORKDIR /app
+COPY src/receiver.mjs /app/receiver.mjs
+
+ENV NODE_EXTRA_CA_CERTS=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+EXPOSE 8080
+USER node
+ENTRYPOINT ["node", "/app/receiver.mjs"]
