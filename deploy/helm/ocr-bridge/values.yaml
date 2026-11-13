@@ -64,7 +64,9 @@ providers:
     # Secret keys: app-id, webhook-secret, private-key.pem
     existingSecret: ocr-app
   gitea:
-    enabled: true
+    # Enable only after setting apiUrl and creating the ocr-gitea Secret;
+    # the receiver treats a missing API URL as fatal for an enabled provider.
+    enabled: false
     # In-cluster API base, e.g.
     # http://gitea-http.gitea.svc.cluster.local:3000/api/v1
     apiUrl: ""
