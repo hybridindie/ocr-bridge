@@ -39,6 +39,7 @@ OpenAI-compatible LLM endpoint (vLLM, LiteLLM, MLflow AI Gateway, Ollama Cloud,
 - [Configuration](#configuration)
 - [How it works](docs/architecture.md)
 - [Security](docs/security.md)
+- [Design write-up](docs/blog/2026-11-13-self-hosting-opencodereview.md)
 - [Development](#development)
 
 ## Quick start

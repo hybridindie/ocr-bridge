@@ -1,0 +1,71 @@
+# Example values for a self-hosted install.
+#
+# Copy to values.local.yaml (gitignored), fill in your endpoints, then:
+#   helm upgrade --install ocr-bridge deploy/helm/ocr-bridge -n ocr \
+#     -f deploy/helm/ocr-bridge/values.example.yaml
+#
+# Secrets are NOT set here — create them first (see README).
+
+image:
+  receiver:
+    repository: ghcr.io/your-org/ocr-receiver
+    tag: "1.1.0"
+  job:
+    repository: ghcr.io/your-org/ocr-job
+    tag: "1.13.8-r2"
+
+providers:
+  github:
+    enabled: true
+    existingSecret: ocr-app
+  gitea:
+    # Set to true after creating the ocr-gitea Secret and filling in apiUrl.
+    enabled: false
+    apiUrl: http://gitea-http.gitea.svc.cluster.local:3000/api/v1
+    webUrl: https://git.example.com
+    botLogin: your-gitea-user
+    existingSecret: ocr-gitea
+
+llm:
+  # Any OpenAI-compatible /chat/completions endpoint. Use the bare model name
+  # when talking to a gateway (no `openai/` prefix).
+  url: http://vllm.ai.svc.cluster.local/v1
+  model: Qwen3.8-27B
+  fallbackModel: GLM-5.3-Flash
+  protocol: openai
+  useAnthropic: false
+  timeout: 420
+  extraBody: '{"thinking":{"type":"disabled"}}'
+  existingSecret: ocr-llm
+  secretKey: token
+
+policy:
+  maxNits: 3
+  incremental: true
+  concurrency: 8
+  language: English
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Enable if you run the Prometheus Operator.
+podMonitor:
+  enabled: false
+  labels:
+    release: prometheus
+
+# Expose /webhook through your ingress controller or a tunnel.
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: ocr.example.com
+      paths:
+        - path: /webhook
+          pathType: Prefix
+  tls:
+    - secretName: ocr-tls
+      hosts:
+        - ocr.example.com

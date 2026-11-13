@@ -2,8 +2,8 @@ apiVersion: v2
 name: ocr-bridge
 description: Runs OpenCodeReview on GitHub App and Gitea pull requests as ephemeral Kubernetes Jobs.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.1.1
+appVersion: "0.1.1"
 keywords:
   - code-review
   - ai
