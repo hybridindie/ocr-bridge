@@ -12,7 +12,7 @@ image:
     tag: "1.1.0"
   job:
     repository: ghcr.io/your-org/ocr-job
-    tag: "1.13.8-r2"
+    tag: "1.13.10-r1"
 
 providers:
   github:

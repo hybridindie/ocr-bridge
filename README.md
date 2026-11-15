@@ -51,9 +51,9 @@ webhook.
 
 ```bash
 podman build -t ghcr.io/you/ocr-receiver:1.1.0 -f Dockerfile.receiver .
-podman build -t ghcr.io/you/ocr-job:1.13.8-r2 -f Dockerfile.job .
+podman build -t ghcr.io/you/ocr-job:1.13.10-r1 -f Dockerfile.job .
 podman push ghcr.io/you/ocr-receiver:1.1.0
-podman push ghcr.io/you/ocr-job:1.13.8-r2
+podman push ghcr.io/you/ocr-job:1.13.10-r1
 ```
 
 `ocr-job` pins the CLI (`ARG OCR_VERSION`); bump the tag with it.
