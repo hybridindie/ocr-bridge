@@ -122,6 +122,7 @@ test('job spec: webhook dedupe name vs manual suffix, env contract', () => {
   assert.equal(env.OCR_MAX_NITS, '3');
   assert.equal(env.OCR_INCREMENTAL, 'true');
   assert.equal(env.OCR_INCLUDE, '**/*.gd');
+  assert.equal(env.OCR_NO_UPDATE, '1');
   const tokenRef = manual.spec.template.spec.containers[0].env
     .find((item) => item.name === 'OCR_LLM_TOKEN');
   assert.deepEqual(tokenRef.valueFrom.secretKeyRef, { name: 'ocr-llm', key: 'token' });

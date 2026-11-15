@@ -280,6 +280,9 @@ export function buildJob({
   if (cfg.fallbackModel) env.push({ name: 'OCR_LLM_FALLBACK_MODEL', value: cfg.fallbackModel });
   if (cfg.receiverUrl) env.push({ name: 'OCR_RECEIVER_URL', value: cfg.receiverUrl });
   if (cfg.include) env.push({ name: 'OCR_INCLUDE', value: cfg.include });
+  // The CLI launcher self-updates with npm by default; never do that inside an
+  // immutable review Job (it unlinks /usr/local/bin/ocr mid-run).
+  env.push({ name: 'OCR_NO_UPDATE', value: '1' });
   if (provider === 'gitea') {
     env.push({ name: 'GITEA_API_URL', value: cfg.giteaApiUrl });
     if (cfg.giteaWebUrl) env.push({ name: 'GITEA_WEB_URL', value: cfg.giteaWebUrl });

@@ -70,5 +70,9 @@ than just deliveries.
   (`ttlSecondsAfterFinished`).
 - **Why no GitHub Checks API?** Review comments are the common denominator
   between GitHub and Gitea; Checks would be GitHub-only.
+- **No self-update in the Job.** The CLI launcher runs `npm i -g` in the
+  background when it sees a newer release, which unlinks `/usr/local/bin/ocr`
+  mid-review. The Job image sets `OCR_NO_UPDATE=1` (and the receiver passes it
+  too) so the pinned version is the version that runs.
 - **Why one image per concern?** The receiver never installs the CLI; the Job
   image never holds provider webhook secrets beyond its own token.

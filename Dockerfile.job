@@ -12,6 +12,8 @@ RUN apt-get update \
  && npm install -g "@alibaba-group/open-code-review@${OCR_VERSION}" \
  && npm cache clean --force
 
+ENV OCR_NO_UPDATE=1
+
 COPY src/run-review.sh /usr/local/bin/run-review.sh
 COPY src/post-review.mjs /usr/local/bin/post-review.mjs
 RUN chmod +x /usr/local/bin/run-review.sh

@@ -42,6 +42,9 @@
 - The PR-body rule is additive (`merge_system_rule: true`) and cannot remove the
   built-in rules; base-ref rules prevent a PR from weakening policy.
 
+- The Job image sets `OCR_NO_UPDATE=1`; the CLI must not install packages at
+  runtime.
+
 ## Endpoint exposure
 
 - Expose only `POST /webhook` publicly.
