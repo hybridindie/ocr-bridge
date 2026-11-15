@@ -16,6 +16,7 @@ import {
   overlaps,
   filterIncremental,
   filterIncrementalByBody,
+  buildSummary,
 } from './post-review.mjs';
 
 const run = promisify(execFile);
@@ -269,4 +270,16 @@ test('end-to-end poster against a mock Gitea API', async () => {
   );
   assert.ok(summary, 'posted the gitea sticky summary');
   assert.match(JSON.parse(summary.body).body, /ocr-summary/);
+});
+
+test('skip summary explains that nothing was reviewable', () => {
+  const text = buildSummary({
+    data: { message: 'Review skipped: no items were selected.', llm: { model: 'SGLang' } },
+    posted: 0,
+    total: 0,
+    failed: [],
+    deferred: [],
+  });
+  assert.match(text, /No reviewable code changes/);
+  assert.doesNotMatch(text, /model `SGLang`/);
 });

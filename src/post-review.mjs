@@ -128,17 +128,27 @@ export const filterIncremental = (comments, existing) =>
 export const buildSummary = ({ data, posted, total, failed, deferred }) => {
   const summary = data.summary || {};
   const model = data.llm?.model || '';
+  const skipped = /no items were selected/i.test(String(data.message || ''));
   const lines = [
     MARKER,
     '### 🤖 OpenCodeReview',
     '',
-    data.message
-      ? String(data.message)
-      : `Reviewed ${summary.files_reviewed ?? '?'} file(s): **${total}** finding(s)` +
-        ` (${posted} inline${failed.length ? `, ${failed.length} in this summary` : ''}` +
-        `${deferred.length ? `, ${deferred.length} lower-severity not shown` : ''}).`,
   ];
-  if (model) {
+  if (skipped) {
+    lines.push(
+      'No reviewable code changes — this PR only touches docs, generated files, '
+      + 'or file types OCR does not review.',
+    );
+  } else if (data.message) {
+    lines.push(String(data.message));
+  } else {
+    lines.push(
+      `Reviewed ${summary.files_reviewed ?? '?'} file(s): **${total}** finding(s)` +
+      ` (${posted} inline${failed.length ? `, ${failed.length} in this summary` : ''}` +
+      `${deferred.length ? `, ${deferred.length} lower-severity not shown` : ''}).`,
+    );
+  }
+  if (model && !skipped) {
     lines.push(
       '',
       `<sub>model \`${model}\` · ${summary.total_tokens ?? '?'} tokens · ${summary.elapsed ?? '?'}</sub>`,

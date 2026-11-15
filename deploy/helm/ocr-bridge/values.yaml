@@ -96,6 +96,9 @@ policy:
   incremental: true
   concurrency: 8
   language: English
+  # Comma-separated globs that bypass OCR's extension allowlist, e.g.
+  # "**/*.gd" for GDScript or "**/*.md" for docs. Empty by default.
+  include: ""
   commands: "/review,/ocr,/open-code-review"
   allowedAssociations: "OWNER,MEMBER,COLLABORATOR"
 

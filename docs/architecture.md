@@ -45,6 +45,9 @@ Mirrors PR-Agent so both can be compared:
 - **Severity.** `critical`/`high` → `Important —`, `medium`/`low` →
   `Nit —`; Important first; at most `OCR_MAX_NITS` nits inline.
 - **Dedupe.** One finding per `path + category + existing code`.
+- **Include overrides.** Some extensions are not in OCR's allowlist
+  (`.gd`, `.md`, `.tscn`, `.tres`). `OCR_INCLUDE` globs are merged into the
+  rule file's `include`, which bypasses the `unsupported_ext` gate.
 - **Skip generated.** `node_modules`, `vendor`, lockfiles, `*.min.js`,
   generated code, and similar paths are dropped.
 - **Fallback.** One retry with `OCR_LLM_FALLBACK_MODEL` if the primary run fails

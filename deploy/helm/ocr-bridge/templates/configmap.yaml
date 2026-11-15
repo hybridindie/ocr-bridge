@@ -23,6 +23,7 @@ data:
   OCR_INCREMENTAL: {{ .Values.policy.incremental | quote }}
   OCR_CONCURRENCY: {{ .Values.policy.concurrency | quote }}
   OCR_LANGUAGE: {{ .Values.policy.language | quote }}
+  OCR_INCLUDE: {{ .Values.policy.include | quote }}
   OCR_COMMANDS: {{ .Values.policy.commands | quote }}
   OCR_ALLOWED_ASSOCIATIONS: {{ .Values.policy.allowedAssociations | quote }}
   OCR_PROVIDERS: {{ include "ocr-bridge.providers" . | quote }}

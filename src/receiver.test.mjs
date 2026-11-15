@@ -94,6 +94,7 @@ test('job spec: webhook dedupe name vs manual suffix, env contract', () => {
     incremental: 'true',
     receiverUrl: 'http://r',
     language: 'English',
+    include: '**/*.gd',
     deadlineSeconds: 1800,
   };
   const base = { repo: 'o/r', pr: 7, base: 'main', head: 'abcdef1234', token: 't', cfg };
@@ -120,6 +121,7 @@ test('job spec: webhook dedupe name vs manual suffix, env contract', () => {
   assert.equal(env.OCR_LLM_FALLBACK_MODEL, 'openai/GLM-5.3-Flash');
   assert.equal(env.OCR_MAX_NITS, '3');
   assert.equal(env.OCR_INCREMENTAL, 'true');
+  assert.equal(env.OCR_INCLUDE, '**/*.gd');
   const tokenRef = manual.spec.template.spec.containers[0].env
     .find((item) => item.name === 'OCR_LLM_TOKEN');
   assert.deepEqual(tokenRef.valueFrom.secretKeyRef, { name: 'ocr-llm', key: 'token' });

@@ -96,7 +96,18 @@ const extra = [process.env.OCR_PR_BODY, process.env.OCR_INSTRUCTION]
 if (extra) {
   rules.push({ path: "**", merge_system_rule: true, rule: extra });
 }
-fs.writeFileSync("/tmp/rule.json", JSON.stringify({ ...base, rules }));
+// The OCR allowlist rejects some extensions outright (e.g. .gd). An include
+// pattern bypasses the unsupported_ext/default_path gates, so operators can opt
+// extra file types in without forking the CLI.
+const include = (process.env.OCR_INCLUDE || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+const merged = { ...base, rules };
+if (include.length > 0) {
+  merged.include = [...new Set([...(Array.isArray(base.include) ? base.include : []), ...include])];
+}
+fs.writeFileSync("/tmp/rule.json", JSON.stringify(merged));
 '
 RULE_ARGS=(--rule /tmp/rule.json)
 

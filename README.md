@@ -146,6 +146,7 @@ pod's environment.
 | `policy.maxNits` | `OCR_MAX_NITS` | `3` | max low-severity inline |
 | `policy.incremental` | `OCR_INCREMENTAL` | `true` | skip posted findings |
 | `policy.concurrency` | `OCR_CONCURRENCY` | `8` | file reviews in parallel |
+| `policy.include` | `OCR_INCLUDE` | — | globs that bypass the extension allowlist, e.g. `**/*.gd` |
 | `policy.commands` | `OCR_COMMANDS` | `/review,/ocr,/open-code-review` | |
 | `policy.allowedAssociations` | `OCR_ALLOWED_ASSOCIATIONS` | `OWNER,MEMBER,COLLABORATOR` | GitHub only |
 | `job.deadlineSeconds` | `OCR_JOB_DEADLINE_SECONDS` | `1800` | activeDeadlineSeconds |

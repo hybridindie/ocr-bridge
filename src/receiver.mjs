@@ -42,6 +42,7 @@ const config = () => {
     incremental: process.env.OCR_INCREMENTAL || 'true',
     receiverUrl: process.env.OCR_RECEIVER_URL || '',
     language: process.env.OCR_LANGUAGE || 'English',
+    include: process.env.OCR_INCLUDE || '',
     deadlineSeconds: Number(process.env.OCR_JOB_DEADLINE_SECONDS || 1800),
     commands: (process.env.OCR_COMMANDS || DEFAULT_COMMANDS.join(','))
       .split(',').map((s) => s.trim()).filter(Boolean),
@@ -278,6 +279,7 @@ export function buildJob({
   if (cfg.extraBody) env.push({ name: 'OCR_LLM_EXTRA_BODY', value: cfg.extraBody });
   if (cfg.fallbackModel) env.push({ name: 'OCR_LLM_FALLBACK_MODEL', value: cfg.fallbackModel });
   if (cfg.receiverUrl) env.push({ name: 'OCR_RECEIVER_URL', value: cfg.receiverUrl });
+  if (cfg.include) env.push({ name: 'OCR_INCLUDE', value: cfg.include });
   if (provider === 'gitea') {
     env.push({ name: 'GITEA_API_URL', value: cfg.giteaApiUrl });
     if (cfg.giteaWebUrl) env.push({ name: 'GITEA_WEB_URL', value: cfg.giteaWebUrl });
