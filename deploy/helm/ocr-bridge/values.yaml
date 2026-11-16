@@ -9,11 +9,11 @@ fullnameOverride: ""
 image:
   receiver:
     repository: ghcr.io/hybridindie/ocr-receiver
-    tag: "1.1.0"
+    tag: "1.2.2"
     pullPolicy: IfNotPresent
   job:
     repository: ghcr.io/hybridindie/ocr-job
-    tag: "1.13.10-r1"
+    tag: "1.13.10-r2"
     pullPolicy: IfNotPresent
   # Image pull secrets for private registries, e.g. [{name: ghcr-pull}]
   pullSecrets: []
@@ -55,7 +55,7 @@ job:
     limits:
       cpu: "1"
       memory: 2Gi
-  deadlineSeconds: 1800
+  deadlineSeconds: 3600
   ttlSecondsAfterFinished: 3600
 
 providers:
@@ -84,7 +84,7 @@ llm:
   fallbackModel: ""
   protocol: openai
   useAnthropic: false
-  timeout: 420
+  timeout: 900
   # JSON object merged into each request, e.g. '{"thinking":{"type":"disabled"}}'
   extraBody: ""
   # Secret holding the gateway token.
@@ -94,7 +94,7 @@ llm:
 policy:
   maxNits: 3
   incremental: true
-  concurrency: 8
+  concurrency: 4
   language: English
   # Comma-separated globs that bypass OCR's extension allowlist, e.g.
   # "**/*.gd" for GDScript or "**/*.md" for docs. Empty by default.

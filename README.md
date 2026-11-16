@@ -50,10 +50,10 @@ webhook.
 ### 1. Build and publish the images
 
 ```bash
-podman build -t ghcr.io/you/ocr-receiver:1.1.0 -f Dockerfile.receiver .
-podman build -t ghcr.io/you/ocr-job:1.13.10-r1 -f Dockerfile.job .
-podman push ghcr.io/you/ocr-receiver:1.1.0
-podman push ghcr.io/you/ocr-job:1.13.10-r1
+podman build -t ghcr.io/you/ocr-receiver:1.2.2 -f Dockerfile.receiver .
+podman build -t ghcr.io/you/ocr-job:1.13.10-r2 -f Dockerfile.job .
+podman push ghcr.io/you/ocr-receiver:1.2.2
+podman push ghcr.io/you/ocr-job:1.13.10-r2
 ```
 
 `ocr-job` pins the CLI (`ARG OCR_VERSION`); bump the tag with it.
@@ -145,11 +145,11 @@ pod's environment.
 | `llm.extraBody` | `OCR_LLM_EXTRA_BODY` | — | JSON merged into requests |
 | `policy.maxNits` | `OCR_MAX_NITS` | `3` | max low-severity inline |
 | `policy.incremental` | `OCR_INCREMENTAL` | `true` | skip posted findings |
-| `policy.concurrency` | `OCR_CONCURRENCY` | `8` | file reviews in parallel |
+| `policy.concurrency` | `OCR_CONCURRENCY` | `4` | file reviews in parallel |
 | `policy.include` | `OCR_INCLUDE` | — | globs that bypass the extension allowlist, e.g. `**/*.gd` |
 | `policy.commands` | `OCR_COMMANDS` | `/review,/ocr,/open-code-review` | |
 | `policy.allowedAssociations` | `OCR_ALLOWED_ASSOCIATIONS` | `OWNER,MEMBER,COLLABORATOR` | GitHub only |
-| `job.deadlineSeconds` | `OCR_JOB_DEADLINE_SECONDS` | `1800` | activeDeadlineSeconds |
+| `job.deadlineSeconds` | `OCR_JOB_DEADLINE_SECONDS` | `3600` | activeDeadlineSeconds |
 
 ## Metrics
 

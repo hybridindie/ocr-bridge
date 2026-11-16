@@ -9,10 +9,10 @@
 image:
   receiver:
     repository: ghcr.io/your-org/ocr-receiver
-    tag: "1.1.0"
+    tag: "1.2.2"
   job:
     repository: ghcr.io/your-org/ocr-job
-    tag: "1.13.10-r1"
+    tag: "1.13.10-r2"
 
 providers:
   github:
@@ -34,7 +34,7 @@ llm:
   fallbackModel: GLM-5.3-Flash
   protocol: openai
   useAnthropic: false
-  timeout: 420
+  timeout: 900
   extraBody: '{"thinking":{"type":"disabled"}}'
   existingSecret: ocr-llm
   secretKey: token
@@ -42,7 +42,7 @@ llm:
 policy:
   maxNits: 3
   incremental: true
-  concurrency: 8
+  concurrency: 4
   language: English
 
 service:
