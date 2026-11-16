@@ -64,18 +64,14 @@ test('slug', () => {
 test('parses the PR-Agent .secrets.toml for reuse', () => {
   const toml = `[github]
 deployment_type = "app"
-app_id = 4070314
+app_id = 123456
 webhook_secret = "whsec"
-private_key = """
------BEGIN RSA PRIVATE KEY-----
-redacted
------END RSA PRIVATE KEY-----
-"""
+private_key = "test-fixture-not-a-key"
 
 [gitea]
 webhook_secret = "other"
 `;
-  assert.deepEqual(parseGithubApp(toml), { appId: '4070314', webhookSecret: 'whsec' });
+  assert.deepEqual(parseGithubApp(toml), { appId: '123456', webhookSecret: 'whsec' });
 });
 
 test('job spec: webhook dedupe name vs manual suffix, env contract', () => {
