@@ -342,6 +342,29 @@ const k8sCreateJob = async (job, cfg = config()) => {
   return res.json();
 };
 
+const k8sGetJob = async (name, cfg = config()) => {
+  const res = await fetch(`${cfg.k8s}/apis/batch/v1/namespaces/${cfg.namespace}/jobs/${name}`, {
+    headers: { Authorization: `Bearer ${getSaToken()}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`k8s get job -> ${res.status} ${await res.text()}`);
+  return res.json();
+};
+
+// A manual /review must not double the load when the push that opened the head
+// already queued (or is running) the automatic review for the same SHA.
+const reviewInFlight = async (repo, pr, head, cfg) => {
+  const stem = `ocr-${slug(repo.replace('/', '-'))}-${pr}-${head.slice(0, 7)}`;
+  const job = await k8sGetJob(stem, cfg);
+  if (!job) return false;
+  const status = job.status || {};
+  const finished = status.succeeded > 0 || status.failed > 0
+    || (status.conditions || []).some(
+      (condition) => ['Complete', 'Failed'].includes(condition.type) && condition.status === 'True',
+    );
+  return !finished;
+};
+
 const metrics = {
   webhooks: new Map(),
   jobsCreated: 0,
@@ -495,6 +518,11 @@ async function handle(provider, event, payload) {
     if (!number) return;
     const token = isGitea ? cfg.giteaToken : await installationToken(repo, cfg);
     const pr = await providerFetch(cfg, provider, token, `/repos/${repo}/pulls/${number}`);
+    if (await reviewInFlight(repo, number, pr.head.sha, cfg)) {
+      metrics.ignored += 1;
+      log('review already running for', repo, `#${number}`, pr.head.sha.slice(0, 7));
+      return;
+    }
     await createJob({
       provider,
       repo,

@@ -186,6 +186,11 @@ test('gitea webhook -> Job (pull_request_sync + issue_comment gating)', async ()
     return json(404, { message: 'not found' });
   });
   const k8s = http.createServer((req, res) => {
+    if (req.method === 'GET') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end('{"message":"not found"}');
+      return;
+    }
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
     req.on('end', () => {
@@ -304,6 +309,11 @@ test('webhook -> Job end to end (mock GitHub + mock Kubernetes)', async () => {
     });
   });
   const k8s = http.createServer((req, res) => {
+    if (req.method === 'GET') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end('{"message":"not found"}');
+      return;
+    }
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
     req.on('end', () => {
