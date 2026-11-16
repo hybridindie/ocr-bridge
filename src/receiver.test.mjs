@@ -57,7 +57,7 @@ test('command parsing and instructions', () => {
 });
 
 test('slug', () => {
-  assert.equal(slug('hybridindie/foo_bar'), 'hybridindie-foo-bar');
+  assert.equal(slug('acme/foo_bar'), 'acme-foo-bar');
   assert.equal(slug('A/B'), 'a-b');
 });
 
@@ -146,11 +146,11 @@ test('job spec: gitea provider wires clone host and api env', () => {
     language: 'English',
     deadlineSeconds: 1800,
     giteaApiUrl: 'http://gitea-http.gitea.svc.cluster.local:3000/api/v1',
-    giteaWebUrl: 'https://git.johndstudios.net',
-    giteaBotLogin: 'johnd',
+    giteaWebUrl: 'https://git.example.com',
+    giteaBotLogin: 'alice',
   };
   const job = buildJob({
-    repo: 'johnd/brix', pr: 3, base: 'main', head: 'abcdef1234',
+    repo: 'acme/widgets', pr: 3, base: 'main', head: 'abcdef1234',
     token: 'pat', provider: 'gitea', cfg, now: 1000,
   });
   const env = Object.fromEntries(
@@ -161,7 +161,7 @@ test('job spec: gitea provider wires clone host and api env', () => {
   assert.equal(env.GIT_HOST, 'gitea-http.gitea.svc.cluster.local:3000');
   assert.equal(env.GIT_AUTH_USER, 'oauth2');
   assert.equal(env.GITEA_API_URL, cfg.giteaApiUrl);
-  assert.equal(env.GITEA_BOT_LOGIN, 'johnd');
+  assert.equal(env.GITEA_BOT_LOGIN, 'alice');
   assert.equal(env.GIT_TOKEN, 'pat');
 });
 
@@ -177,7 +177,7 @@ test('gitea webhook -> Job (pull_request_sync + issue_comment gating)', async ()
       res.end(JSON.stringify(payload));
     };
     if (req.url.includes('/collaborators/') && req.url.endsWith('/permission')) {
-      const permission = req.url.includes('/collaborators/johnd/') ? 'owner' : 'read';
+      const permission = req.url.includes('/collaborators/alice/') ? 'owner' : 'read';
       return json(200, { permission, role_name: permission });
     }
     if (req.url.includes('/pulls/9')) {
@@ -206,7 +206,7 @@ test('gitea webhook -> Job (pull_request_sync + issue_comment gating)', async ()
     GITEA_API_URL: `http://127.0.0.1:${gitea.address().port}/api/v1`,
     GITEA_TOKEN: 'pat',
     GITEA_WEBHOOK_SECRET: 'gwhsec',
-    GITEA_BOT_LOGIN: 'johnd',
+    GITEA_BOT_LOGIN: 'alice',
     OCR_PROVIDERS: 'github,gitea',
     KUBERNETES_API_URL: `http://127.0.0.1:${k8s.address().port}`,
     KUBERNETES_TOKEN_PATH: tokenPath,
@@ -242,7 +242,7 @@ test('gitea webhook -> Job (pull_request_sync + issue_comment gating)', async ()
   const synced = await send('pull_request_sync', {
     action: 'synchronized',
     number: 9,
-    repository: { full_name: 'johnd/brix' },
+    repository: { full_name: 'acme/widgets' },
     pull_request: { base: { ref: 'main' }, head: { sha: 'beef1234' }, body: 'x', draft: false },
   });
   assert.equal(synced.status, 202);
@@ -252,15 +252,15 @@ test('gitea webhook -> Job (pull_request_sync + issue_comment gating)', async ()
     action: 'created',
     is_pull: true,
     issue: { number: 9 },
-    repository: { full_name: 'johnd/brix' },
+    repository: { full_name: 'acme/widgets' },
     comment: { body: '/review', user: { login: 'outsider' } },
   });
   await send('issue_comment', {
     action: 'created',
     is_pull: true,
     issue: { number: 9 },
-    repository: { full_name: 'johnd/brix' },
-    comment: { body: '/review', user: { login: 'johnd' } },
+    repository: { full_name: 'acme/widgets' },
+    comment: { body: '/review', user: { login: 'alice' } },
   });
 
   for (let i = 0; i < 100 && jobs.length < 2; i += 1) {
@@ -271,7 +271,7 @@ test('gitea webhook -> Job (pull_request_sync + issue_comment gating)', async ()
   k8s.close();
 
   assert.equal(jobs.length, 2, 'one sync job + one trusted manual job');
-  assert.equal(jobs[0].metadata.name, 'ocr-johnd-brix-9-beef123');
+  assert.equal(jobs[0].metadata.name, 'ocr-acme-widgets-9-beef123');
   const env = Object.fromEntries(
     jobs[1].spec.template.spec.containers[0].env.map((item) => [item.name, item.value]),
   );

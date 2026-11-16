@@ -245,7 +245,7 @@ test('end-to-end poster against a mock Gitea API', async () => {
         ...process.env,
         GIT_PROVIDER: 'gitea',
         GITEA_API_URL: `http://127.0.0.1:${port}/api/v1`,
-        GITEA_BOT_LOGIN: 'johnd',
+        GITEA_BOT_LOGIN: 'alice',
         GIT_TOKEN: 'pat',
         REPO: 'o/r',
         PR_NUMBER: '1',
