@@ -15,6 +15,8 @@ import { pathToFileURL } from 'node:url';
 
 const DEFAULT_API = 'https://api.github.com';
 export const MARKER = '<!-- ocr-summary -->';
+// Machine-readable cross-push checkpoint embedded in the sticky summary.
+export const CHECKPOINT_PREFIX = '<!-- ocr-checkpoint:';
 
 // Cap every "details" list in the sticky summary so one pathological run cannot
 // turn the comment into hundreds of lines.
@@ -58,18 +60,39 @@ export const dedupeFindings = (findings) => {
   return [...seen.values()];
 };
 
-export const normalizeFindings = (findings, { maxNits = 3, skipPatterns = DEFAULT_SKIP } = {}) => {
+export const normalizeFindings = (
+  findings,
+  {
+    maxNits = 3,
+    skipPatterns = DEFAULT_SKIP,
+    routeSeverityBelow = '',
+    routeCategories = [],
+  } = {},
+) => {
   const relevant = findings.filter(
     (finding) => finding && finding.path && !shouldSkipPath(finding.path, skipPatterns),
   );
   const unique = dedupeFindings(relevant).sort(
     (a, b) => severityRank(b.severity) - severityRank(a.severity),
   );
-  const important = unique.filter((finding) => severityRank(finding.severity) >= 3);
-  const nits = unique.filter((finding) => severityRank(finding.severity) < 3);
+  // Routing mirrors the Action's route_severity_below/route_categories: the
+  // findings move to the summary instead of being dropped, and findings with an
+  // empty/unknown severity or category are never routed.
+  const threshold = severityRank(routeSeverityBelow);
+  const categories = new Set(
+    (routeCategories || []).map((value) => String(value).trim().toLowerCase()).filter(Boolean),
+  );
+  const routed = (finding) => {
+    const rank = severityRank(finding.severity);
+    if (threshold > 0 && rank > 0 && rank <= threshold) return true;
+    return categories.has(String(finding.category || '').trim().toLowerCase());
+  };
+  const keepInline = unique.filter((finding) => !routed(finding));
+  const important = keepInline.filter((finding) => severityRank(finding.severity) >= 3);
+  const nits = keepInline.filter((finding) => severityRank(finding.severity) < 3);
   return {
     inline: [...important, ...nits.slice(0, maxNits)],
-    deferred: nits.slice(maxNits),
+    deferred: [...nits.slice(maxNits), ...unique.filter(routed)],
   };
 };
 
@@ -129,7 +152,7 @@ export const overlaps = (a, b) => {
 export const filterIncremental = (comments, existing) =>
   comments.filter((comment) => !existing.some((previous) => overlaps(comment, previous)));
 
-export const buildSummary = ({ data, posted, total, failed, deferred }) => {
+export const buildSummary = ({ data, posted, total, failed, deferred, checkpoint }) => {
   const summary = data.summary || {};
   const model = data.llm?.model || '';
   const skipped = /no items were selected/i.test(String(data.message || ''));
@@ -149,7 +172,7 @@ export const buildSummary = ({ data, posted, total, failed, deferred }) => {
     lines.push(
       `Reviewed ${summary.files_reviewed ?? '?'} file(s): **${total}** finding(s)` +
       ` (${posted} inline${failed.length ? `, ${failed.length} in this summary` : ''}` +
-      `${deferred.length ? `, ${deferred.length} lower-severity not shown` : ''}).`,
+      `${deferred.length ? `, ${deferred.length} additional in this summary` : ''}).`,
     );
   }
   if (model && !skipped) {
@@ -197,13 +220,19 @@ export const buildSummary = ({ data, posted, total, failed, deferred }) => {
     lines.push('', '</details>');
   }
   if (deferred.length > 0) {
-    lines.push('', '<details><summary>Additional lower-severity findings</summary>', '');
+    lines.push('', '<details><summary>Additional findings</summary>', '');
     for (const finding of deferred) {
       lines.push(
         `- \`${finding.path}\` — ${String(finding.content || finding.message || '').trim()}`,
       );
     }
     lines.push('', '</details>');
+  }
+  // Cross-push checkpoint. Written only when the run reviewed everything it
+  // selected, so the next push can review <checkpoint>..<head> instead of the
+  // whole merge-base range. Absent => next run falls back to the full range.
+  if (checkpoint?.head && checkpoint?.base) {
+    lines.push('', `${CHECKPOINT_PREFIX} ${checkpoint.head} base=${checkpoint.base} -->`);
   }
   return lines.join('\n');
 };
@@ -270,6 +299,108 @@ export const filterIncrementalByBody = (comments, existing) =>
       && String(previous.body || '').trim() === String(comment.body || '').trim(),
   ));
 
+// Resolve this reviewer's own outdated inline threads (GitHub only). A thread
+// is eligible when it is unresolved, marked outdated by GitHub (its lines no
+// longer exist), authored entirely by the bot (any human reply opts it out), and
+// not covered by a finding from the current run. mode: false | report | true.
+// REST names an App's comments `<slug>[bot]`; GraphQL's Bot.login omits the
+// suffix. Compare without it so the sticky's author matches thread authors.
+const sameLogin = (a, b) => {
+  const bare = (login) => String(login || '').replace(/\[bot\]$/, '');
+  return Boolean(a) && bare(a) === bare(b);
+};
+
+export async function resolveOutdated({ provider, token, repo, pr, findings, botLogin, mode }) {
+  const result = { resolved: 0, wouldResolve: 0, skipped: 0 };
+  if (provider !== 'github' || !botLogin || !mode || mode === 'false') return result;
+
+  const gql = async (query, variables) => {
+    const res = await fetch(process.env.GITHUB_GRAPHQL_URL || 'https://api.github.com/graphql', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.errors) {
+      throw new Error(`${res.status} ${JSON.stringify(json.errors || json)}`);
+    }
+    return json.data;
+  };
+
+  const [owner, name] = String(repo).split('/');
+  const data = await gql(
+    `query($owner: String!, $name: String!, $num: Int!) {
+       repository(owner: $owner, name: $name) {
+         pullRequest(number: $num) {
+           reviewThreads(first: 100) {
+             nodes {
+               id isResolved isOutdated
+               comments(first: 20) {
+                 nodes { author { login } path line originalLine startLine originalStartLine }
+               }
+             }
+           }
+         }
+       }
+     }`,
+    { owner, name, num: Number(pr) },
+  );
+
+  const threads = data?.repository?.pullRequest?.reviewThreads?.nodes || [];
+  const covered = (thread) => (thread.comments?.nodes || []).some((comment) => {
+    const path = comment.path;
+    const a = Number(comment.startLine ?? comment.line ?? comment.originalStartLine ?? comment.originalLine);
+    const b = Number(comment.line ?? comment.originalLine ?? comment.startLine ?? comment.originalStartLine);
+    if (!path || !Number.isFinite(a) || !Number.isFinite(b)) return false;
+    const probe = { path, line: Math.max(a, b), start_line: Math.min(a, b) };
+    return findings.some((finding) => overlaps(probe, finding));
+  });
+
+  for (const thread of threads) {
+    if (thread.isResolved || !thread.isOutdated) continue;
+    const authors = (thread.comments?.nodes || []).map((comment) => comment.author?.login);
+    const ours = authors.length > 0 && authors.every((login) => sameLogin(login, botLogin));
+    if (!ours || covered(thread)) {
+      result.skipped += 1;
+      continue;
+    }
+    if (mode === 'report') {
+      result.wouldResolve += 1;
+      console.error(`resolve_outdated: would resolve thread ${thread.id}`);
+      continue;
+    }
+    try {
+      await gql(
+        'mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { isResolved } } }',
+        { id: thread.id },
+      );
+      result.resolved += 1;
+    } catch (err) {
+      console.error(`resolve_outdated: failed for ${thread.id}: ${err.message}`);
+    }
+  }
+  if (result.resolved || result.wouldResolve) {
+    console.error(
+      `resolve_outdated: resolved ${result.resolved}, would resolve ${result.wouldResolve}, `
+      + `skipped ${result.skipped}`,
+    );
+  }
+  return result;
+}
+
+// Decide whether this run may advance the cross-push checkpoint. Only a run
+// that reviewed everything it selected may: any failed item or a partial status
+// means the next push must re-review the full range.
+export const checkpointFrom = (data, env = process.env) => {
+  const coverage = data?.manifest?.coverage;
+  const failed = Array.isArray(coverage?.failed) ? coverage.failed : [];
+  const status = String(data?.status || '');
+  const complete = Boolean(coverage) && failed.length === 0 && status !== 'partial' && status !== 'failed';
+  if (!complete || String(env.OCR_CHECKPOINT || 'true') === 'false') return null;
+  if (!env.OCR_REVIEWED_HEAD || !env.OCR_BASE_SHA) return null;
+  return { head: env.OCR_REVIEWED_HEAD, base: env.OCR_BASE_SHA };
+};
+
 export async function main() {
   const provider = process.env.GIT_PROVIDER || 'github';
   const api = provider === 'gitea'
@@ -291,6 +422,11 @@ export async function main() {
 
   const { inline: selected, deferred } = normalizeFindings(findings, {
     maxNits: Number(process.env.OCR_MAX_NITS || 3),
+    routeSeverityBelow: process.env.OCR_ROUTE_SEVERITY_BELOW || '',
+    routeCategories: (process.env.OCR_ROUTE_CATEGORIES || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
   });
   let inline = toInlineComments(selected, { provider });
 
@@ -335,7 +471,11 @@ export async function main() {
     }
   }
 
-  const summaryBody = buildSummary({ data, posted, total: findings.length, failed, deferred });
+  const checkpoint = checkpointFrom(data);
+
+  const summaryBody = buildSummary({
+    data, posted, total: findings.length, failed, deferred, checkpoint,
+  });
   const issueComments = await apiRequest(api, provider, token, `/repos/${repo}/issues/${pr}/comments?per_page=100`);
   const sticky = (issueComments || []).find((comment) => String(comment.body || '').includes(MARKER));
   if (sticky) {
@@ -350,6 +490,26 @@ export async function main() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ body: summaryBody }),
     });
+  }
+
+  try {
+    let botLogin = sticky?.user?.login;
+    if (!botLogin) {
+      const after = await apiRequest(api, provider, token, `/repos/${repo}/issues/${pr}/comments?per_page=100`);
+      botLogin = (after || []).find((comment) => String(comment.body || '').includes(MARKER))
+        ?.user?.login;
+    }
+    await resolveOutdated({
+      provider,
+      token,
+      repo,
+      pr,
+      findings: toInlineComments([...selected, ...deferred], { provider }),
+      botLogin,
+      mode: process.env.OCR_RESOLVE_OUTDATED || 'false',
+    });
+  } catch (err) {
+    console.error(`resolve_outdated skipped: ${err.message}`);
   }
 
   const receiver = process.env.OCR_RECEIVER_URL;

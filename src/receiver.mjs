@@ -44,6 +44,7 @@ const config = () => {
     language: process.env.OCR_LANGUAGE || 'English',
     include: process.env.OCR_INCLUDE || '',
     deadlineSeconds: Number(process.env.OCR_JOB_DEADLINE_SECONDS || 1800),
+    checkpoint: process.env.OCR_CHECKPOINT === 'true',
     commands: (process.env.OCR_COMMANDS || DEFAULT_COMMANDS.join(','))
       .split(',').map((s) => s.trim()).filter(Boolean),
     allowedAssociations: (process.env.OCR_ALLOWED_ASSOCIATIONS || DEFAULT_ASSOCIATIONS.join(','))
@@ -264,7 +265,7 @@ export function buildBackground({ title, body } = {}, limit = BACKGROUND_LIMIT) 
 
 export function buildJob({
   repo, pr, base, head, token, provider = 'github',
-  manual = false, instruction, prTitle, prBody, cfg = config(), now = Date.now(),
+  manual = false, instruction, prTitle, prBody, checkpoint, cfg = config(), now = Date.now(),
 }) {
   const stem = `ocr-${slug(repo.replace('/', '-'))}-${pr}-${head.slice(0, 7)}`;
   const name = (manual ? `${stem}-${now.toString(36)}` : stem).slice(0, 63);
@@ -316,10 +317,18 @@ export function buildJob({
   // (effort=medium, 15-minute task budget, unlimited tokens) still apply.
   for (const key of [
     'OCR_EFFORT', 'OCR_TASK_TIMEOUT', 'OCR_MAX_TOKENS_BUDGET', 'OCR_MAX_TOKENS',
-    'OCR_MAX_TOOLS', 'OCR_EXCLUDE',
+    'OCR_MAX_TOOLS', 'OCR_EXCLUDE', 'OCR_ROUTE_SEVERITY_BELOW', 'OCR_ROUTE_CATEGORIES',
+    'OCR_RESOLVE_OUTDATED', 'OCR_CHECKPOINT',
   ]) {
     const value = process.env[key];
     if (value) env.push({ name: key, value });
+  }
+  // Cross-push checkpoint: review <checkpoint>..<head> instead of the whole
+  // merge-base range. The job re-verifies ancestry and base stability and falls
+  // back to the full range when either changed.
+  if (checkpoint?.head && checkpoint?.base) {
+    env.push({ name: 'CHECKPOINT_SHA', value: checkpoint.head });
+    env.push({ name: 'CHECKPOINT_BASE_SHA', value: checkpoint.base });
   }
   if (instruction) env.push({ name: 'OCR_INSTRUCTION', value: instruction });
   const background = buildBackground({ title: prTitle, body: prBody });
@@ -475,6 +484,32 @@ const recordReview = ({ repo, status, tokens, elapsed, findings }) => {
   }
 };
 
+// Machine-readable cross-push checkpoint written by the poster into the sticky
+// summary: `<!-- ocr-checkpoint: <head> base=<base> -->`.
+export const CHECKPOINT_RE = /<!--\s*ocr-checkpoint:\s*([0-9a-f]{7,40})\s+base=([0-9a-f]{7,40})\s*-->/i;
+
+export function parseCheckpoint(body) {
+  const match = CHECKPOINT_RE.exec(String(body || ''));
+  return match ? { head: match[1], base: match[2] } : null;
+}
+
+// Previous checkpoint for a PR, if the bot has posted one. Fail-closed: any
+// error means the job falls back to the full merge-base range.
+export async function lastCheckpoint(cfg, provider, token, repo, pr) {
+  try {
+    const comments = await providerFetch(
+      cfg, provider, token, `/repos/${repo}/issues/${pr}/comments?per_page=100`,
+    );
+    const sticky = (comments || []).find(
+      (comment) => String(comment.body || '').includes('<!-- ocr-summary -->'),
+    );
+    return parseCheckpoint(sticky?.body);
+  } catch (err) {
+    log('checkpoint lookup failed', String(err));
+    return null;
+  }
+}
+
 async function createJob(args) {
   const cfg = config();
   const job = buildJob({ ...args, cfg });
@@ -509,13 +544,18 @@ async function handle(provider, event, payload) {
     if (payload.pull_request?.draft) return;
     const pr = payload.number ?? payload.pull_request?.number;
     if (!pr) return;
+    const token = isGitea ? cfg.giteaToken : await installationToken(repo, cfg);
+    const checkpoint = cfg.checkpoint
+      ? await lastCheckpoint(cfg, provider, token, repo, pr)
+      : null;
     await createJob({
       provider,
       repo,
       pr,
       base: payload.pull_request?.base?.ref,
       head: payload.pull_request?.head?.sha,
-      token: isGitea ? cfg.giteaToken : await installationToken(repo, cfg),
+      token,
+      checkpoint,
       prTitle: payload.pull_request?.title,
       prBody: payload.pull_request?.body,
     });

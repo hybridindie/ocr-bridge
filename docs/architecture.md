@@ -29,6 +29,8 @@ the queue.
 | `REPO`, `PR_NUMBER`, `BASE_REF`, `HEAD_SHA` | review target |
 | `GITEA_API_URL`, `GITEA_BOT_LOGIN` | Gitea posting |
 | `OCR_LLM_*` | endpoint, model, fallback, extra body, timeout |
+| `CHECKPOINT_SHA`, `CHECKPOINT_BASE_SHA` | last fully reviewed head and its base, when the summary has one |
+| `OCR_CHECKPOINT`, `OCR_RESOLVE_OUTDATED`, `OCR_ROUTE_SEVERITY_BELOW`, `OCR_ROUTE_CATEGORIES` | review policy, forwarded only when set |
 | `OCR_BACKGROUND` | PR title + description, passed as `--background` |
 | `OCR_INSTRUCTION` | manual `/review <instruction>` text, added as a rule |
 | `OCR_EFFORT`, `OCR_TASK_TIMEOUT`, `OCR_MAX_TOKENS`, `OCR_MAX_TOKENS_BUDGET`, `OCR_MAX_TOOLS`, `OCR_EXCLUDE` | review tuning, forwarded only when set |
@@ -59,6 +61,16 @@ Mirrors PR-Agent so both can be compared:
   or produces no result.
 - **Incremental.** Inline findings already posted by the bot are skipped.
   GitHub compares line intervals; Gitea compares the rendered body per path.
+- **Checkpoints.** A fully covered run records
+  `<!-- ocr-checkpoint: <head> base=<sha> -->` in the summary; the next push
+  reviews `<checkpoint>..<head>` when the base is unchanged and the checkpoint
+  is an ancestor, and the full range otherwise.
+- **Routing.** `OCR_ROUTE_SEVERITY_BELOW` / `OCR_ROUTE_CATEGORIES` move
+  findings into the summary instead of opening threads; findings with no
+  severity or category are never routed.
+- **Outdated threads (GitHub).** `OCR_RESOLVE_OUTDATED=true` resolves the
+  bot's own outdated threads that no current finding covers; `report` only
+  logs them.
 - **Summary.** One sticky comment with `<!-- ocr-summary -->`, updated in place;
   findings that cannot be anchored inline are listed there, and so are the
   files a partial run did not review (`manifest.coverage.failed`, with the

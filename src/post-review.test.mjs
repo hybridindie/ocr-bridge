@@ -17,6 +17,8 @@ import {
   filterIncremental,
   filterIncrementalByBody,
   buildSummary,
+  checkpointFrom,
+  resolveOutdated,
 } from './post-review.mjs';
 
 const run = promisify(execFile);
@@ -270,6 +272,129 @@ test('end-to-end poster against a mock Gitea API', async () => {
   );
   assert.ok(summary, 'posted the gitea sticky summary');
   assert.match(JSON.parse(summary.body).body, /ocr-summary/);
+});
+
+test('routing: severity threshold and categories move findings to the summary', () => {
+  const findings = [
+    { path: 'a.py', severity: 'high', category: 'bug', content: 'high bug' },
+    { path: 'a.py', severity: 'medium', category: 'bug', content: 'medium bug' },
+    { path: 'a.py', severity: 'low', category: 'style', content: 'low style' },
+    { path: 'a.py', severity: 'low', category: 'documentation', content: 'low doc' },
+  ];
+  const routed = normalizeFindings(findings, { routeSeverityBelow: 'low' });
+  assert.deepEqual(routed.inline.map((f) => f.content), ['high bug', 'medium bug']);
+  assert.deepEqual(
+    routed.deferred.map((f) => f.content),
+    ['low style', 'low doc'],
+  );
+
+  const byCategory = normalizeFindings(findings, { routeCategories: ['style', 'BUG'] });
+  assert.deepEqual(byCategory.inline.map((f) => f.content), ['low doc']);
+  assert.deepEqual(
+    byCategory.deferred.map((f) => f.content),
+    ['high bug', 'medium bug', 'low style'],
+  );
+});
+
+test('checkpoint gating: only a fully covered run may advance it', () => {
+  const env = { OCR_REVIEWED_HEAD: 'abc1234', OCR_BASE_SHA: 'def5678' };
+  const complete = { status: 'complete', manifest: { coverage: { failed: [] } } };
+  assert.deepEqual(checkpointFrom(complete, env), { head: 'abc1234', base: 'def5678' });
+  assert.equal(checkpointFrom(complete, { ...env, OCR_CHECKPOINT: 'false' }), null);
+  assert.equal(checkpointFrom(complete, { OCR_REVIEWED_HEAD: 'abc1234' }), null);
+  assert.equal(
+    checkpointFrom({ ...complete, status: 'partial' }, env),
+    null,
+  );
+  assert.equal(
+    checkpointFrom({ status: 'complete', manifest: { coverage: { failed: [{ path: 'a.py' }] } } }, env),
+    null,
+  );
+  assert.equal(checkpointFrom({ status: 'skipped' }, env), null);
+});
+
+test('resolve_outdated: only the bot\'s own uncovered outdated threads', async () => {
+  const bot = 'ocr-app[bot]';
+  // GraphQL reports the App's login without the `[bot]` suffix REST uses.
+  const comment = (login, line) => ({
+    author: { login: login.replace(/\[bot\]$/, '') }, path: 'a.py', line, originalLine: line,
+  });
+  const threads = [
+    { id: 'stale', isResolved: false, isOutdated: true, comments: { nodes: [comment(bot, 5)] } },
+    { id: 'done', isResolved: true, isOutdated: true, comments: { nodes: [comment(bot, 6)] } },
+    { id: 'current', isResolved: false, isOutdated: false, comments: { nodes: [comment(bot, 7)] } },
+    {
+      id: 'replied',
+      isResolved: false,
+      isOutdated: true,
+      comments: { nodes: [comment(bot, 8), comment('alice', 8)] },
+    },
+    { id: 'covered', isResolved: false, isOutdated: true, comments: { nodes: [comment(bot, 20)] } },
+  ];
+  const mutations = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      const { query, variables } = JSON.parse(body);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (query.includes('resolveReviewThread')) {
+        mutations.push(variables.id);
+        return res.end(JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } }));
+      }
+      return res.end(JSON.stringify({
+        data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } },
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  process.env.GITHUB_GRAPHQL_URL = `http://127.0.0.1:${server.address().port}/graphql`;
+  const args = {
+    provider: 'github',
+    token: 't',
+    repo: 'o/r',
+    pr: 1,
+    botLogin: bot,
+    findings: [{ path: 'a.py', line: 21, start_line: 19 }],
+  };
+  try {
+    assert.deepEqual(
+      await resolveOutdated({ ...args, mode: 'report' }),
+      { resolved: 0, wouldResolve: 1, skipped: 2 },
+    );
+    assert.deepEqual(mutations, [], 'report mode mutates nothing');
+
+    assert.deepEqual(
+      await resolveOutdated({ ...args, mode: 'true' }),
+      { resolved: 1, wouldResolve: 0, skipped: 2 },
+    );
+    assert.deepEqual(mutations, ['stale']);
+
+    // Off, Gitea, or an unknown bot login: no GraphQL call at all.
+    for (const extra of [{ mode: 'false' }, { mode: 'true', provider: 'gitea' }, { mode: 'true', botLogin: '' }]) {
+      assert.deepEqual(
+        await resolveOutdated({ ...args, ...extra }),
+        { resolved: 0, wouldResolve: 0, skipped: 0 },
+      );
+    }
+    assert.deepEqual(mutations, ['stale']);
+  } finally {
+    delete process.env.GITHUB_GRAPHQL_URL;
+    server.close();
+  }
+});
+
+test('summary embeds the cross-push checkpoint only when given', () => {
+  const base = {
+    data: { status: 'complete', llm: { model: 'm' }, summary: {}, comments: [] },
+    posted: 0,
+    total: 0,
+    failed: [],
+    deferred: [],
+  };
+  const withCp = buildSummary({ ...base, checkpoint: { head: 'abc1234', base: 'def5678' } });
+  assert.match(withCp, /<!-- ocr-checkpoint: abc1234 base=def5678 -->/);
+  assert.doesNotMatch(buildSummary(base), /ocr-checkpoint/);
 });
 
 test('summary surfaces coverage failures, warnings and cached tokens', () => {
