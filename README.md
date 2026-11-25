@@ -59,12 +59,14 @@ webhook.
 
 ```bash
 podman build -t ghcr.io/you/ocr-receiver:1.2.2 -f Dockerfile.receiver .
-podman build -t ghcr.io/you/ocr-job:1.13.10-r2 -f Dockerfile.job .
+podman build -t ghcr.io/you/ocr-job:1.14.3-r1 -f Dockerfile.job .
 podman push ghcr.io/you/ocr-receiver:1.2.2
-podman push ghcr.io/you/ocr-job:1.13.10-r2
+podman push ghcr.io/you/ocr-job:1.14.3-r1
 ```
 
-`ocr-job` pins the CLI (`ARG OCR_VERSION`); bump the tag with it.
+`ocr-job` pins the CLI (`ARG OCR_VERSION`); bump the tag with it. Add
+`--build-arg GIT_SHIM=true` to install the optional `git grep` wrapper
+([below](#code_search-and-pcre)).
 
 ### 2. Create the secrets
 
@@ -237,6 +239,23 @@ Four settings address them. The first three are on by default.
 
 Skipping unchanged rebases depends on checkpoints (`policy.checkpoint`).
 
+## code_search and PCRE
+
+OCR's `code_search` tool runs `git grep -i -P -n ... -e <text>` when the model
+sets `use_perl_regexp`, and models set it for literal text such as
+`falls(&self, ground:`, which PCRE rejects ("missing closing parenthesis").
+Before CLI 1.14.3 the tool call then returned nothing and the model reviewed
+without the search it asked for. 1.14.3 (upstream
+[alibaba/open-code-review#1811](https://github.com/alibaba/open-code-review/pull/1811))
+returns the regex error to the model so it can retry.
+
+`src/git-shim.sh` is an **optional** stopgap from before that fix. Built with
+`--build-arg GIT_SHIM=true`, the Job image installs it as `/usr/local/bin/git`:
+a `git grep -P` that fails to compile its pattern is retried once with `-F`,
+and every other git command goes straight to `/usr/bin/git`. The default image
+does not install it. Once 1.14.3 is confirmed on your reviews, the shim (and
+the build argument) can be removed.
+
 ## Metrics
 
 `/metrics` (Prometheus):
@@ -260,7 +279,7 @@ Operator.
 
 | Component | Tested |
 |---|---|
-| OpenCodeReview CLI | 1.13.x (pinned in `Dockerfile.job`) |
+| OpenCodeReview CLI | 1.14.3 (pinned in `Dockerfile.job`) |
 | git (Job image) | ≥ 2.41, as OCR requires (`node:*-trixie-slim`; the build checks it) |
 | Kubernetes | 1.28+ (`batch/v1` Jobs, `ttlSecondsAfterFinished`) |
 | Gitea | 1.22+ / 28.x |
@@ -290,8 +309,8 @@ npm start         # run the receiver locally (needs env, see values.yaml)
 The receiver and poster are unit-tested against mock GitHub, Gitea and
 Kubernetes servers, plus a Job-spec contract test. `run-review.test.mjs` runs
 the Job script against a local bare origin with stub `ocr` and poster binaries
-(unchanged-rebase skip, stacked-PR retarget, incremental range, rubric); it
-needs `git` and `bash`.
+(unchanged-rebase skip, stacked-PR retarget, incremental range, rubric, the
+git wrapper); it needs `git` and `bash`.
 
 ## License
 
