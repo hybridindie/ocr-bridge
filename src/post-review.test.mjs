@@ -272,6 +272,36 @@ test('end-to-end poster against a mock Gitea API', async () => {
   assert.match(JSON.parse(summary.body).body, /ocr-summary/);
 });
 
+test('summary surfaces coverage failures, warnings and cached tokens', () => {
+  const text = buildSummary({
+    data: {
+      status: 'partial',
+      message: 'Review partially complete: 2 finding(s); 1 of 3 selected item(s) failed.',
+      llm: { model: 'test-model' },
+      summary: {
+        files_reviewed: 2, total_tokens: 1000, cache_read_tokens: 400, elapsed: '1m0s',
+      },
+      comments: [],
+      warnings: [{ file: 'a.py', message: 'subtask timed out', type: 'warning' }],
+      manifest: {
+        coverage: {
+          failed: [{ path: 'b.py', classification: 'timeout', reason: 'task deadline exceeded' }],
+        },
+      },
+    },
+    posted: 0,
+    total: 2,
+    failed: [],
+    deferred: [],
+  });
+  assert.match(text, /1m0s/);
+  assert.match(text, /1000 tokens \(400 cached\)/);
+  assert.match(text, /Not reviewed/);
+  assert.match(text, /`b\.py` — timeout: task deadline exceeded/);
+  assert.match(text, /Reviewer warnings/);
+  assert.match(text, /`a\.py` — subtask timed out/);
+});
+
 test('skip summary explains that nothing was reviewable', () => {
   const text = buildSummary({
     data: { message: 'Review skipped: no items were selected.', llm: { model: 'SGLang' } },

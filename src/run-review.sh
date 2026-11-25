@@ -4,7 +4,9 @@
 # Expects: GIT_TOKEN, REPO, PR_NUMBER, BASE_REF, HEAD_SHA,
 #          OCR_LLM_URL, OCR_LLM_MODEL, OCR_LLM_TOKEN.
 # Optional: OCR_USE_ANTHROPIC, OCR_LLM_PROTOCOL, OCR_LLM_EXTRA_BODY,
-#           OCR_LLM_TIMEOUT, OCR_CONCURRENCY, OCR_LANGUAGE.
+#           OCR_LLM_TIMEOUT, OCR_CONCURRENCY, OCR_LANGUAGE, OCR_BACKGROUND,
+#           OCR_EFFORT, OCR_TASK_TIMEOUT, OCR_MAX_TOKENS_BUDGET, OCR_MAX_TOKENS,
+#           OCR_MAX_TOOLS, OCR_EXCLUDE.
 set -uo pipefail
 
 log() { printf '[ocr-job] %s\n' "$*" >&2; }
@@ -73,14 +75,15 @@ log "reviewing ${REPO}#${PR_NUMBER} (${BASE_REF}...${HEAD_SHA})"
 # Rule policy:
 #  - use the *base* ref's .opencodereview/rule.json, never the PR head, so a PR
 #    cannot weaken the rules (PR-Agent reads .pr_agent.toml from the base too);
-#  - append one broad rule built from the PR description (ticket compliance)
-#    and/or the manual command text, keeping the built-in system rules.
+#  - append one broad rule for a manual `/review <instruction>` command, keeping
+#    the built-in system rules. The PR title/description is *not* a rule: it goes
+#    through `--background` (OCR's documented channel for requirement context).
 if git cat-file -e "origin/${BASE_REF}:.opencodereview/rule.json" 2>/dev/null; then
   git show "origin/${BASE_REF}:.opencodereview/rule.json" > /tmp/base-rule.json
 else
   printf '{"rules":[]}' > /tmp/base-rule.json
 fi
-OCR_PR_BODY="${OCR_PR_BODY:-}" OCR_INSTRUCTION="${OCR_INSTRUCTION:-}" node -e '
+OCR_INSTRUCTION="${OCR_INSTRUCTION:-}" node -e '
 const fs = require("fs");
 let base = { rules: [] };
 try {
@@ -89,27 +92,51 @@ try {
   console.error("ignoring invalid base rule.json: " + err.message);
 }
 const rules = Array.isArray(base.rules) ? base.rules : [];
-const extra = [process.env.OCR_PR_BODY, process.env.OCR_INSTRUCTION]
-  .map((value) => (value || "").trim())
-  .filter(Boolean)
-  .join("\n\n");
+const extra = (process.env.OCR_INSTRUCTION || "").trim();
 if (extra) {
   rules.push({ path: "**", merge_system_rule: true, rule: extra });
 }
 // The OCR allowlist rejects some extensions outright (e.g. .gd). An include
 // pattern bypasses the unsupported_ext/default_path gates, so operators can opt
-// extra file types in without forking the CLI.
-const include = (process.env.OCR_INCLUDE || "")
+// extra file types in without forking the CLI. Excludes are merged the same way:
+// the base rule file list is kept and OCR_EXCLUDE adds to it (user excludes are
+// the highest-precedence filter, so this is how noisy paths are dropped without
+// touching the repositories).
+const patterns = (name) => (process.env[name] || "")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const include = patterns("OCR_INCLUDE");
+const exclude = patterns("OCR_EXCLUDE");
 const merged = { ...base, rules };
 if (include.length > 0) {
   merged.include = [...new Set([...(Array.isArray(base.include) ? base.include : []), ...include])];
 }
+if (exclude.length > 0) {
+  merged.exclude = [...new Set([...(Array.isArray(base.exclude) ? base.exclude : []), ...exclude])];
+}
 fs.writeFileSync("/tmp/rule.json", JSON.stringify(merged));
 '
 RULE_ARGS=(--rule /tmp/rule.json)
+
+# Requirement/business context (PR title + description) goes through
+# `--background`, which OCR injects into the plan and main prompts. The receiver
+# already trims it to the recommended 2000 characters; clamp again here so a
+# stale receiver cannot push a description large enough to hurt review quality.
+BACKGROUND_ARGS=()
+if [ -n "${OCR_BACKGROUND:-}" ]; then
+  BACKGROUND_ARGS=(--background "${OCR_BACKGROUND:0:2000}")
+fi
+
+# Optional review tuning. Every value is passed only when set, so the CLI/template
+# defaults still apply otherwise (effort=medium, task timeout=15 min scaled by
+# effort, no token budget, template tool-round cap).
+TUNING_ARGS=()
+[ -n "${OCR_EFFORT:-}" ] && TUNING_ARGS+=(--effort "${OCR_EFFORT}")
+[ -n "${OCR_TASK_TIMEOUT:-}" ] && TUNING_ARGS+=(--timeout "${OCR_TASK_TIMEOUT}")
+[ -n "${OCR_MAX_TOKENS_BUDGET:-}" ] && TUNING_ARGS+=(--max-tokens-budget "${OCR_MAX_TOKENS_BUDGET}")
+[ -n "${OCR_MAX_TOKENS:-}" ] && TUNING_ARGS+=(--max-tokens "${OCR_MAX_TOKENS}")
+[ -n "${OCR_MAX_TOOLS:-}" ] && TUNING_ARGS+=(--max-tools "${OCR_MAX_TOOLS}")
 
 do_review() {
   ocr review \
@@ -119,6 +146,8 @@ do_review() {
     --audience agent \
     --output /tmp/result.json \
     --concurrency "${OCR_CONCURRENCY:-8}" \
+    "${TUNING_ARGS[@]}" \
+    "${BACKGROUND_ARGS[@]}" \
     "${RULE_ARGS[@]}" \
     >/tmp/ocr.stdout 2>/tmp/ocr.stderr
 }

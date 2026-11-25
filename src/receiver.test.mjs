@@ -10,6 +10,8 @@ import {
   verifyGiteaSignature,
   parseCommand,
   buildJob,
+  buildBackground,
+  BACKGROUND_LIMIT,
   slug,
   renderMetrics,
   resetMetrics,
@@ -104,6 +106,7 @@ test('job spec: webhook dedupe name vs manual suffix, env contract', () => {
     ...base,
     manual: true,
     instruction: 'focus',
+    prTitle: 'feat: tighten review',
     prBody: 'Closes #1',
     now: 1000,
   });
@@ -113,7 +116,7 @@ test('job spec: webhook dedupe name vs manual suffix, env contract', () => {
     manual.spec.template.spec.containers[0].env.map((item) => [item.name, item.value]),
   );
   assert.equal(env.OCR_INSTRUCTION, 'focus');
-  assert.equal(env.OCR_PR_BODY, 'Closes #1');
+  assert.equal(env.OCR_BACKGROUND, 'feat: tighten review\n\nCloses #1');
   assert.equal(env.OCR_LLM_FALLBACK_MODEL, 'openai/GLM-5.3-Flash');
   assert.equal(env.OCR_MAX_NITS, '3');
   assert.equal(env.OCR_INCREMENTAL, 'true');
@@ -177,7 +180,7 @@ test('gitea webhook -> Job (pull_request_sync + issue_comment gating)', async ()
       return json(200, { permission, role_name: permission });
     }
     if (req.url.includes('/pulls/9')) {
-      return json(200, { number: 9, base: { ref: 'main' }, head: { sha: 'beef1234' }, body: 'Closes #8' });
+      return json(200, { number: 9, title: 'fix: gitea hook', base: { ref: 'main' }, head: { sha: 'beef1234' }, body: 'Closes #8' });
     }
     return json(404, { message: 'not found' });
   });
@@ -273,7 +276,69 @@ test('gitea webhook -> Job (pull_request_sync + issue_comment gating)', async ()
   );
   assert.equal(env.GIT_PROVIDER, 'gitea');
   assert.equal(env.GIT_TOKEN, 'pat');
-  assert.equal(env.OCR_PR_BODY, 'Closes #8');
+  assert.equal(env.OCR_BACKGROUND, 'fix: gitea hook\n\nCloses #8');
+});
+
+test('background: title first, then body, clamped to the recommended size', () => {
+  assert.equal(buildBackground({}), '');
+  assert.equal(buildBackground({ title: 'feat: x' }), 'feat: x');
+  assert.equal(
+    buildBackground({ title: 'feat: x', body: 'Closes #1' }),
+    'feat: x\n\nCloses #1',
+  );
+
+  const long = `${'word '.repeat(800)}tail`;
+  const clamped = buildBackground({ title: 'feat: x', body: long });
+  assert.ok(clamped.length <= BACKGROUND_LIMIT, `got ${clamped.length} chars`);
+  assert.ok(clamped.startsWith('feat: x\n\nword'));
+  assert.ok(clamped.endsWith('…'));
+
+  // A title alone that exceeds the limit is still clamped.
+  assert.ok(buildBackground({ title: 'a'.repeat(5000) }).length <= BACKGROUND_LIMIT);
+});
+
+test('job spec: review tuning knobs are forwarded when set', () => {
+  const cfg = {
+    namespace: 'ocr',
+    jobImage: 'img',
+    jobServiceAccount: 'ocr-job',
+    llmUrl: 'http://gw/v1',
+    llmModel: 'm',
+    llmSecretName: 'ocr-llm',
+    llmSecretKey: 'token',
+    extraBody: '',
+    concurrency: '8',
+    fallbackModel: '',
+    maxNits: '3',
+    incremental: 'true',
+    receiverUrl: '',
+    language: 'English',
+    deadlineSeconds: 3600,
+  };
+  const keys = {
+    OCR_EFFORT: 'high',
+    OCR_TASK_TIMEOUT: '20',
+    OCR_MAX_TOKENS_BUDGET: '3000000',
+    OCR_MAX_TOKENS: '100000',
+    OCR_MAX_TOOLS: '60',
+    OCR_EXCLUDE: '**/.claude/**',
+  };
+  Object.assign(process.env, keys);
+  try {
+    const job = buildJob({
+      repo: 'o/r', pr: 1, base: 'main', head: 'abcdef1234', token: 't', cfg,
+    });
+    const env = Object.fromEntries(
+      job.spec.template.spec.containers[0].env.map((item) => [item.name, item.value]),
+    );
+    for (const [key, value] of Object.entries(keys)) assert.equal(env[key], value);
+  } finally {
+    for (const key of Object.keys(keys)) delete process.env[key];
+  }
+
+  const plain = buildJob({ repo: 'o/r', pr: 1, base: 'main', head: 'abcdef1234', token: 't', cfg });
+  const names = plain.spec.template.spec.containers[0].env.map((item) => item.name);
+  for (const key of Object.keys(keys)) assert.ok(!names.includes(key), `${key} must be absent`);
 });
 
 test('metrics render', () => {
@@ -351,6 +416,7 @@ test('webhook -> Job end to end (mock GitHub + mock Kubernetes)', async () => {
     number: 7,
     repository: { full_name: 'o/r' },
     pull_request: {
+      title: 'Fix the thing',
       base: { ref: 'main' },
       head: { sha: 'abcdef1234' },
       body: 'Closes #1',
@@ -387,6 +453,6 @@ test('webhook -> Job end to end (mock GitHub + mock Kubernetes)', async () => {
   assert.equal(env.PR_NUMBER, '7');
   assert.equal(env.BASE_REF, 'main');
   assert.equal(env.HEAD_SHA, 'abcdef1234');
-  assert.equal(env.OCR_PR_BODY, 'Closes #1');
+  assert.equal(env.OCR_BACKGROUND, 'Fix the thing\n\nCloses #1');
 });
 

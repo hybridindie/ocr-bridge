@@ -16,6 +16,10 @@ import { pathToFileURL } from 'node:url';
 const DEFAULT_API = 'https://api.github.com';
 export const MARKER = '<!-- ocr-summary -->';
 
+// Cap every "details" list in the sticky summary so one pathological run cannot
+// turn the comment into hundreds of lines.
+const MAX_DETAILS = 10;
+
 const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
 const DEFAULT_SKIP = [
   String.raw`(^|/)(node_modules|vendor|dist|build|out|target|\.venv|venv|__pycache__)/`,
@@ -149,10 +153,41 @@ export const buildSummary = ({ data, posted, total, failed, deferred }) => {
     );
   }
   if (model && !skipped) {
+    const cached = Number(summary.cache_read_tokens || 0);
     lines.push(
       '',
-      `<sub>model \`${model}\` · ${summary.total_tokens ?? '?'} tokens · ${summary.elapsed ?? '?'}</sub>`,
+      `<sub>model \`${model}\` · ${summary.total_tokens ?? '?'} tokens`
+      + `${cached ? ` (${cached} cached)` : ''} · ${summary.elapsed ?? '?'}</sub>`,
     );
+  }
+  // OCR only exits non-zero for operational failures; a partial run still
+  // exits 0 and reports the affected files under manifest.coverage.failed.
+  // Surface them so "partially complete" is actionable instead of a mystery.
+  const incomplete = Array.isArray(data.manifest?.coverage?.failed)
+    ? data.manifest.coverage.failed
+    : [];
+  if (incomplete.length > 0) {
+    lines.push('', '<details><summary>Not reviewed</summary>', '');
+    for (const item of incomplete.slice(0, MAX_DETAILS)) {
+      const why = [item.classification, item.reason].filter(Boolean).join(': ');
+      lines.push(`- \`${item.path}\`${why ? ` — ${why}` : ''}`);
+    }
+    if (incomplete.length > MAX_DETAILS) {
+      lines.push(`- …and ${incomplete.length - MAX_DETAILS} more`);
+    }
+    lines.push('', '</details>');
+  }
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  if (warnings.length > 0) {
+    lines.push('', '<details><summary>Reviewer warnings</summary>', '');
+    for (const warning of warnings.slice(0, MAX_DETAILS)) {
+      const where = warning.file ? `\`${warning.file}\` — ` : '';
+      lines.push(`- ${where}${warning.message || 'unknown warning'}`);
+    }
+    if (warnings.length > MAX_DETAILS) {
+      lines.push(`- …and ${warnings.length - MAX_DETAILS} more`);
+    }
+    lines.push('', '</details>');
   }
   if (failed.length > 0) {
     lines.push('', '<details><summary>Findings the reviewer could not place inline</summary>', '');

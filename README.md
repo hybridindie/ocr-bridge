@@ -27,8 +27,10 @@ OpenAI-compatible LLM endpoint (vLLM, LiteLLM, MLflow AI Gateway, Ollama Cloud,
 - **One Job per PR head SHA**; duplicate deliveries are 409 no-ops.
 - **Policy parity with PR-Agent**: severity prefixes, Important-first, capped
   nits, one finding per root cause, generated-path filtering, base-ref rules,
-  ticket rule from the PR body, fallback model, incremental comments, sticky
-  summary.
+  PR title and description as `--background` context, fallback model,
+  incremental comments, sticky summary.
+- **Partial runs are explained**: files OCR could not review and its warnings
+  are listed in the summary, with the reason.
 - **Metrics**: webhooks, jobs, reviews, tokens, findings, duration.
 
 ## Contents
@@ -147,9 +149,25 @@ pod's environment.
 | `policy.incremental` | `OCR_INCREMENTAL` | `true` | skip posted findings |
 | `policy.concurrency` | `OCR_CONCURRENCY` | `4` | file reviews in parallel |
 | `policy.include` | `OCR_INCLUDE` | — | globs that bypass the extension allowlist, e.g. `**/*.gd` |
+| `policy.exclude` | `OCR_EXCLUDE` | — | globs added to the rule file's `exclude` |
+| `policy.effort` | `OCR_EFFORT` | CLI (`medium`) | `--effort`: 1/2/3 review rounds |
+| `policy.taskTimeout` | `OCR_TASK_TIMEOUT` | CLI (15, scaled by effort) | `--timeout`, minutes per subtask |
+| `policy.maxTokens` | `OCR_MAX_TOKENS` | CLI (200k) | `--max-tokens`, prompt ceiling per subtask; keep it below the model's context |
+| `policy.maxTokensBudget` | `OCR_MAX_TOKENS_BUDGET` | — (unlimited) | `--max-tokens-budget`, total tokens per review; a runaway guard |
+| `policy.maxTools` | `OCR_MAX_TOOLS` | CLI | `--max-tools`, tool-call rounds per subtask |
 | `policy.commands` | `OCR_COMMANDS` | `/review,/ocr,/open-code-review` | |
 | `policy.allowedAssociations` | `OCR_ALLOWED_ASSOCIATIONS` | `OWNER,MEMBER,COLLABORATOR` | GitHub only |
 | `job.deadlineSeconds` | `OCR_JOB_DEADLINE_SECONDS` | `3600` | activeDeadlineSeconds |
+
+The tuning values are passed to `ocr review` only when set, so an empty value
+keeps the CLI default. Per-repository rules, `include` and `exclude` belong in
+`.opencodereview/rule.json` on the base branch; the Job merges them with the
+values above.
+
+The PR title and description reach the model through `--background`, OCR's
+channel for requirement context. The receiver joins them (title first) and
+trims the result at a line or word boundary to the recommended 2000
+characters; the Job clamps it again.
 
 ## Metrics
 
@@ -175,6 +193,7 @@ Operator.
 | Component | Tested |
 |---|---|
 | OpenCodeReview CLI | 1.13.x (pinned in `Dockerfile.job`) |
+| git (Job image) | ≥ 2.41, as OCR requires (`node:*-trixie-slim`; the build checks it) |
 | Kubernetes | 1.28+ (`batch/v1` Jobs, `ttlSecondsAfterFinished`) |
 | Gitea | 1.22+ / 28.x |
 | GitHub | GitHub App, REST 2022-11-28 |

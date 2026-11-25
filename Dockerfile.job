@@ -2,14 +2,26 @@
 #
 # Runs `ocr review` against a PR checkout and posts the findings back. Pin
 # OCR_VERSION and the image tag together; the CLI is an npm package.
-FROM node:24.22.1-bookworm-slim
+#
+# trixie, not bookworm: OCR requires git >= 2.41 and bookworm ships 2.39, so a
+# bookworm-based Job runs an unsupported git. trixie-slim carries 2.47 at a
+# comparable size; the guard below fails the build if a future base downgrades
+# git again.
+FROM node:24.22.1-trixie-slim
 
 ARG OCR_VERSION=1.13.10
+ARG MIN_GIT_VERSION=2.41
 
+# Only git + CA roots are needed on top of the Node base: the CLI is an npm
+# launcher for a static binary, and `git` supplies the diff.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
- && rm -rf /var/lib/apt/lists/* \
- && npm install -g "@alibaba-group/open-code-review@${OCR_VERSION}" \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN dpkg --compare-versions "$(git --version | awk '{print $3}')" ge "${MIN_GIT_VERSION}" \
+ || { echo "git $(git --version | awk '{print $3}') is older than the required ${MIN_GIT_VERSION}" >&2; exit 1; }
+
+RUN npm install -g --no-audit --no-fund "@alibaba-group/open-code-review@${OCR_VERSION}" \
  && npm cache clean --force
 
 ENV OCR_NO_UPDATE=1

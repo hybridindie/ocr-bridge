@@ -24,6 +24,12 @@ data:
   OCR_CONCURRENCY: {{ .Values.policy.concurrency | quote }}
   OCR_LANGUAGE: {{ .Values.policy.language | quote }}
   OCR_INCLUDE: {{ .Values.policy.include | quote }}
+  OCR_EXCLUDE: {{ .Values.policy.exclude | quote }}
+  OCR_EFFORT: {{ .Values.policy.effort | quote }}
+  OCR_TASK_TIMEOUT: {{ .Values.policy.taskTimeout | quote }}
+  OCR_MAX_TOKENS: {{ .Values.policy.maxTokens | quote }}
+  OCR_MAX_TOKENS_BUDGET: {{ .Values.policy.maxTokensBudget | quote }}
+  OCR_MAX_TOOLS: {{ .Values.policy.maxTools | quote }}
   OCR_COMMANDS: {{ .Values.policy.commands | quote }}
   OCR_ALLOWED_ASSOCIATIONS: {{ .Values.policy.allowedAssociations | quote }}
   OCR_PROVIDERS: {{ include "ocr-bridge.providers" . | quote }}
