@@ -29,6 +29,9 @@ OpenAI-compatible LLM endpoint (vLLM, LiteLLM, MLflow AI Gateway, Ollama Cloud,
   nits, one finding per root cause, generated-path filtering, base-ref rules,
   PR title and description as `--background` context, fallback model,
   incremental comments, sticky summary.
+- **Incremental across pushes**: a fully covered review records a checkpoint,
+  and the next push reviews only the commits since it. Outdated bot threads
+  can be resolved automatically (GitHub).
 - **Partial runs are explained**: files OCR could not review and its warnings
   are listed in the summary, with the reason.
 - **Metrics**: webhooks, jobs, reviews, tokens, findings, duration.
@@ -155,6 +158,10 @@ pod's environment.
 | `policy.maxTokens` | `OCR_MAX_TOKENS` | CLI (200k) | `--max-tokens`, prompt ceiling per subtask; keep it below the model's context |
 | `policy.maxTokensBudget` | `OCR_MAX_TOKENS_BUDGET` | — (unlimited) | `--max-tokens-budget`, total tokens per review; a runaway guard |
 | `policy.maxTools` | `OCR_MAX_TOOLS` | CLI | `--max-tools`, tool-call rounds per subtask |
+| `policy.checkpoint` | `OCR_CHECKPOINT` | `true` | review `<checkpoint>..<head>` on later pushes ([below](#cross-push-checkpoints)) |
+| `policy.resolveOutdated` | `OCR_RESOLVE_OUTDATED` | `report` | `false` \| `report` \| `true`; GitHub only |
+| `policy.routeSeverityBelow` | `OCR_ROUTE_SEVERITY_BELOW` | — | findings at or below this severity go to the summary |
+| `policy.routeCategories` | `OCR_ROUTE_CATEGORIES` | — | categories that go to the summary, e.g. `style,documentation` |
 | `policy.commands` | `OCR_COMMANDS` | `/review,/ocr,/open-code-review` | |
 | `policy.allowedAssociations` | `OCR_ALLOWED_ASSOCIATIONS` | `OWNER,MEMBER,COLLABORATOR` | GitHub only |
 | `job.deadlineSeconds` | `OCR_JOB_DEADLINE_SECONDS` | `3600` | activeDeadlineSeconds |
@@ -168,6 +175,33 @@ The PR title and description reach the model through `--background`, OCR's
 channel for requirement context. The receiver joins them (title first) and
 trims the result at a line or word boundary to the recommended 2000
 characters; the Job clamps it again.
+
+### Cross-push checkpoints
+
+Without a checkpoint, every push re-reviews the whole `merge-base..head` range,
+so a PR that takes five pushes pays for five full reviews.
+
+1. When a run reviewed everything it selected (`manifest.coverage.failed` is
+   empty and the status is not `partial` or `failed`), the poster appends
+   `<!-- ocr-checkpoint: <head> base=<base sha> -->` to the sticky summary.
+2. On the next `pull_request` event the receiver reads that marker and passes
+   `CHECKPOINT_SHA` / `CHECKPOINT_BASE_SHA` to the Job. A manual `/review`
+   never gets a checkpoint.
+3. The Job uses it only if the base ref still resolves to the recorded base,
+   the fetched head is the webhook head, and the checkpoint is an ancestor of
+   the head (`git merge-base --is-ancestor`). Otherwise it logs
+   `checkpoint … unusable; reviewing the full range`.
+
+Fail-closed is the point: a force-push, a merge from the base branch, a
+partial run or a missing marker all fall back to a full review.
+
+### Resolving outdated threads
+
+With `policy.resolveOutdated: report`, each GitHub run logs which of the bot's
+own outdated, unresolved threads (GraphQL `reviewThreads`) it would resolve. A
+thread with any human reply, or one whose lines a current finding still
+covers, is never touched. Once the reports look right, set it to `"true"`.
+Gitea has no thread-resolution API, so the setting does nothing there.
 
 ## Metrics
 

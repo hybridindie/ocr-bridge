@@ -30,6 +30,10 @@ data:
   OCR_MAX_TOKENS: {{ .Values.policy.maxTokens | quote }}
   OCR_MAX_TOKENS_BUDGET: {{ .Values.policy.maxTokensBudget | quote }}
   OCR_MAX_TOOLS: {{ .Values.policy.maxTools | quote }}
+  OCR_CHECKPOINT: {{ .Values.policy.checkpoint | quote }}
+  OCR_RESOLVE_OUTDATED: {{ .Values.policy.resolveOutdated | quote }}
+  OCR_ROUTE_SEVERITY_BELOW: {{ .Values.policy.routeSeverityBelow | quote }}
+  OCR_ROUTE_CATEGORIES: {{ .Values.policy.routeCategories | quote }}
   OCR_COMMANDS: {{ .Values.policy.commands | quote }}
   OCR_ALLOWED_ASSOCIATIONS: {{ .Values.policy.allowedAssociations | quote }}
   OCR_PROVIDERS: {{ include "ocr-bridge.providers" . | quote }}

@@ -6,7 +6,8 @@
 # Optional: OCR_USE_ANTHROPIC, OCR_LLM_PROTOCOL, OCR_LLM_EXTRA_BODY,
 #           OCR_LLM_TIMEOUT, OCR_CONCURRENCY, OCR_LANGUAGE, OCR_BACKGROUND,
 #           OCR_EFFORT, OCR_TASK_TIMEOUT, OCR_MAX_TOKENS_BUDGET, OCR_MAX_TOKENS,
-#           OCR_MAX_TOOLS, OCR_EXCLUDE.
+#           OCR_MAX_TOOLS, OCR_EXCLUDE, OCR_ROUTE_SEVERITY_BELOW, OCR_ROUTE_CATEGORIES,
+#           OCR_RESOLVE_OUTDATED, OCR_CHECKPOINT, CHECKPOINT_SHA, CHECKPOINT_BASE_SHA.
 set -uo pipefail
 
 log() { printf '[ocr-job] %s\n' "$*" >&2; }
@@ -70,7 +71,32 @@ if ! git fetch -q --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/or
 fi
 git checkout -q "refs/remotes/origin/pr-${PR_NUMBER}"
 
-log "reviewing ${REPO}#${PR_NUMBER} (${BASE_REF}...${HEAD_SHA})"
+BASE_SHA="$(git rev-parse "origin/${BASE_REF}")"
+REVIEWED_HEAD="$(git rev-parse "refs/remotes/origin/pr-${PR_NUMBER}")"
+export OCR_BASE_SHA="$BASE_SHA"
+export OCR_REVIEWED_HEAD="$REVIEWED_HEAD"
+
+# Cross-push checkpoint: the previous run left the head it fully covered in the
+# sticky summary. Review only checkpoint..head when the repo state still proves
+# that range is complete: the base has not moved, the webhook head is what we
+# fetched, and the checkpoint is an ancestor. Anything else falls back to the
+# full merge-base range (fail-closed).
+FROM_REF="origin/${BASE_REF}"
+if [ -n "${CHECKPOINT_SHA:-}" ] && [ -n "${CHECKPOINT_BASE_SHA:-}" ] \
+  && [ "$BASE_SHA" = "${CHECKPOINT_BASE_SHA}" ] && [ "$REVIEWED_HEAD" = "$HEAD_SHA" ]; then
+  if ! git cat-file -e "${CHECKPOINT_SHA}^{commit}" 2>/dev/null; then
+    git fetch -q --no-tags origin "${CHECKPOINT_SHA}" >/dev/null 2>&1 || true
+  fi
+  if git cat-file -e "${CHECKPOINT_SHA}^{commit}" 2>/dev/null \
+    && git merge-base --is-ancestor "${CHECKPOINT_SHA}" "$REVIEWED_HEAD" 2>/dev/null; then
+    FROM_REF="${CHECKPOINT_SHA}"
+    log "incremental review from checkpoint ${CHECKPOINT_SHA}"
+  else
+    log "checkpoint ${CHECKPOINT_SHA} unusable; reviewing the full range"
+  fi
+fi
+
+log "reviewing ${REPO}#${PR_NUMBER} (${FROM_REF}...${HEAD_SHA})"
 
 # Rule policy:
 #  - use the *base* ref's .opencodereview/rule.json, never the PR head, so a PR
@@ -140,7 +166,7 @@ TUNING_ARGS=()
 
 do_review() {
   ocr review \
-    --from "origin/${BASE_REF}" \
+    --from "${FROM_REF}" \
     --to "origin/pr-${PR_NUMBER}" \
     --format json \
     --audience agent \

@@ -119,6 +119,24 @@ policy:
   maxTokens: ""
   maxTokensBudget: ""
   maxTools: ""
+  # Cross-push checkpoints. A run that reviewed everything it selected records
+  # its head in the sticky summary, and the next push reviews only
+  # <checkpoint>..<head> instead of the whole merge-base range. Fail-closed: a
+  # moved base, a force-push, a partial run or a manual /review all fall back
+  # to the full range.
+  checkpoint: true
+  # Resolve the bot's own outdated inline threads after a push (GitHub only):
+  # "false" | "report" | "true". `report` logs what it would resolve and
+  # mutates nothing; run it for a while before switching to "true". A thread
+  # with a human reply, or one a current finding still covers, is never
+  # resolved.
+  resolveOutdated: report
+  # Move findings from inline comments into the summary instead of dropping
+  # them. Empty routes nothing.
+  #   routeSeverityBelow: low | medium | high | critical (that level and below)
+  #   routeCategories: comma-separated, e.g. "style,documentation"
+  routeSeverityBelow: ""
+  routeCategories: ""
   commands: "/review,/ocr,/open-code-review"
   allowedAssociations: "OWNER,MEMBER,COLLABORATOR"
 

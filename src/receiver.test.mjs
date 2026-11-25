@@ -12,6 +12,7 @@ import {
   buildJob,
   buildBackground,
   BACKGROUND_LIMIT,
+  parseCheckpoint,
   slug,
   renderMetrics,
   resetMetrics,
@@ -295,6 +296,46 @@ test('background: title first, then body, clamped to the recommended size', () =
 
   // A title alone that exceeds the limit is still clamped.
   assert.ok(buildBackground({ title: 'a'.repeat(5000) }).length <= BACKGROUND_LIMIT);
+});
+
+test('checkpoint: parse from the sticky summary and forward to the Job', () => {
+  assert.equal(parseCheckpoint(''), null);
+  assert.equal(parseCheckpoint('<!-- ocr-summary -->\nno marker here'), null);
+  assert.deepEqual(
+    parseCheckpoint('<!-- ocr-summary -->\ntext\n<!-- ocr-checkpoint: abc1234 base=def5678 -->'),
+    { head: 'abc1234', base: 'def5678' },
+  );
+
+  const cfg = {
+    namespace: 'ocr',
+    jobImage: 'img',
+    jobServiceAccount: 'ocr-job',
+    llmUrl: 'http://gw/v1',
+    llmModel: 'm',
+    llmSecretName: 'ocr-llm',
+    llmSecretKey: 'token',
+    extraBody: '',
+    concurrency: '8',
+    fallbackModel: '',
+    maxNits: '3',
+    incremental: 'true',
+    receiverUrl: '',
+    language: 'English',
+    deadlineSeconds: 3600,
+  };
+  const withCheckpoint = buildJob({
+    repo: 'o/r', pr: 1, base: 'main', head: 'abcdef1234', token: 't', cfg,
+    checkpoint: { head: 'abc1234', base: 'def5678' },
+  });
+  const env = Object.fromEntries(
+    withCheckpoint.spec.template.spec.containers[0].env.map((item) => [item.name, item.value]),
+  );
+  assert.equal(env.CHECKPOINT_SHA, 'abc1234');
+  assert.equal(env.CHECKPOINT_BASE_SHA, 'def5678');
+
+  const plain = buildJob({ repo: 'o/r', pr: 1, base: 'main', head: 'abcdef1234', token: 't', cfg });
+  const names = plain.spec.template.spec.containers[0].env.map((item) => item.name);
+  assert.ok(!names.includes('CHECKPOINT_SHA'));
 });
 
 test('job spec: review tuning knobs are forwarded when set', () => {
