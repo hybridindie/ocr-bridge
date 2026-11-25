@@ -9,7 +9,7 @@
 # git again.
 FROM node:24.22.1-trixie-slim
 
-ARG OCR_VERSION=1.13.10
+ARG OCR_VERSION=1.14.3
 ARG MIN_GIT_VERSION=2.41
 
 # Only git + CA roots are needed on top of the Node base: the CLI is an npm
@@ -29,5 +29,16 @@ ENV OCR_NO_UPDATE=1
 COPY src/run-review.sh /usr/local/bin/run-review.sh
 COPY src/post-review.mjs /usr/local/bin/post-review.mjs
 RUN chmod +x /usr/local/bin/run-review.sh
+
+# Optional stopgap, off by default: install git-shim.sh as /usr/local/bin/git
+# (ahead of /usr/bin on PATH) so a literal pattern the model sent as PCRE is
+# retried as -F. OCR 1.14.3 reports the regex error to the model itself, so
+# this is only for images that want the older retry behaviour as well.
+ARG GIT_SHIM=false
+COPY src/git-shim.sh /usr/local/lib/ocr-bridge/git-shim.sh
+RUN if [ "${GIT_SHIM}" = "true" ]; then \
+      install -m 0755 /usr/local/lib/ocr-bridge/git-shim.sh /usr/local/bin/git \
+      && [ "$(command -v git)" = /usr/local/bin/git ] && git --version; \
+    fi
 
 ENTRYPOINT ["/usr/local/bin/run-review.sh"]

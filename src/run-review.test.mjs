@@ -1,5 +1,6 @@
 // run-review.sh against a local origin: the unchanged-rebase skip, the
-// severity rubric in the generated rule file.
+// severity rubric in the generated rule file, and the optional git grep
+// wrapper (git-shim.sh).
 //
 // `ocr` and the poster are stubs that record how they were called; git is real.
 // The script's GitHub remote URL is redirected to a local bare repository with
@@ -13,6 +14,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const script = path.join(here, 'run-review.sh');
+const shim = path.join(here, 'git-shim.sh');
 const REAL_GIT = execFileSync('sh', ['-c', 'command -v git']).toString().trim();
 
 const gitEnv = {
@@ -220,4 +222,33 @@ test('severity rubric is appended to every rule and a trailing catch-all', () =>
   assert.deepEqual(JSON.parse(fs.readFileSync(ruleFile, 'utf8')).rules, [
     { path: '**/.claude/**', rule: 'Generated directory.' },
   ]);
+});
+
+test('git wrapper retries an uncompilable PCRE grep as a fixed string', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ocr-shim-'));
+  git(root, 'init', '-q', '-b', 'main');
+  const head = commit(root, 'a.rs', 'fn falls(&self, ground: i32) {}\n[profile]\n', 'init');
+  const grep = (...pattern) => spawnSync('bash', [shim, '--no-pager', 'grep', '-i', '-P', '-n', '-e', ...pattern, head, '--'], {
+    cwd: root, env: { ...process.env, ...gitEnv, OCR_REAL_GIT: REAL_GIT }, encoding: 'utf8',
+  });
+
+  // Unbalanced ( and [ in literal text the model sent with use_perl_regexp.
+  const paren = grep('falls(&self, ground:');
+  assert.equal(paren.status, 0, paren.stderr);
+  assert.match(paren.stdout, /a\.rs:1:fn falls\(&self, ground: i32\)/);
+  const bracket = grep('[profile');
+  assert.equal(bracket.status, 0, bracket.stderr);
+  assert.match(bracket.stdout, /a\.rs:2:\[profile\]/);
+
+  // A valid regex still runs as PCRE; no match is still exit 1.
+  const regex = grep('falls\\(.*ground');
+  assert.equal(regex.status, 0);
+  assert.match(regex.stdout, /a\.rs:1:/);
+  assert.equal(grep('nothing(').status, 1);
+
+  // Every other git command passes straight through.
+  const other = spawnSync('bash', [shim, 'log', '-1', '--format=%H'], {
+    cwd: root, env: { ...process.env, ...gitEnv, OCR_REAL_GIT: REAL_GIT }, encoding: 'utf8',
+  });
+  assert.equal(other.stdout.trim(), head);
 });
