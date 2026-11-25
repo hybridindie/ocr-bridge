@@ -57,11 +57,13 @@ webhook.
 
 ### 1. Build and publish the images
 
+Published defaults follow the chart version: `ocr-receiver:<chart>` and `ocr-job:<ocr-cli>-bridge<chart>` (for example `0.5.1` and `1.14.3-bridge0.5.1`), so a public build never shares a tag with a private build pushed to the same registry. Build your own with the commands below and set `image.*.repository`/`tag`.
+
 ```bash
-podman build -t ghcr.io/you/ocr-receiver:1.2.2 -f Dockerfile.receiver .
-podman build -t ghcr.io/you/ocr-job:1.14.3-r1 -f Dockerfile.job .
-podman push ghcr.io/you/ocr-receiver:1.2.2
-podman push ghcr.io/you/ocr-job:1.14.3-r1
+podman build -t ghcr.io/you/ocr-receiver:0.5.1 -f Dockerfile.receiver .
+podman build -t ghcr.io/you/ocr-job:1.14.3-bridge0.5.1 -f Dockerfile.job .
+podman push ghcr.io/you/ocr-receiver:0.5.1
+podman push ghcr.io/you/ocr-job:1.14.3-bridge0.5.1
 ```
 
 `ocr-job` pins the CLI (`ARG OCR_VERSION`); bump the tag with it. Add
