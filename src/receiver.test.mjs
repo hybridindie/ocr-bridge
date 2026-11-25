@@ -363,6 +363,10 @@ test('job spec: review tuning knobs are forwarded when set', () => {
     OCR_MAX_TOKENS: '100000',
     OCR_MAX_TOOLS: '60',
     OCR_EXCLUDE: '**/.claude/**',
+    OCR_NITS_FIRST_ROUND_ONLY: 'false',
+    OCR_SKIP_UNCHANGED_REBASE: 'false',
+    OCR_SEVERITY_RUBRIC: 'false',
+    OCR_DEMOTE_UNQUOTED_IMPORTANT: 'false',
   };
   Object.assign(process.env, keys);
   try {

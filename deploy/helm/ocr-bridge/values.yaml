@@ -137,6 +137,27 @@ policy:
   #   routeCategories: comma-separated, e.g. "style,documentation"
   routeSeverityBelow: ""
   routeCategories: ""
+  # Convergence: stop each push from opening a fresh round of threads. See
+  # "Why reviews don't converge" in the README.
+  #
+  # Nits once. The first review of a PR may post up to maxNits nits inline;
+  # later reviews post only Important findings inline and list nits in the
+  # summary. The round count lives in the sticky summary.
+  nitsFirstRoundOnly: true
+  # Skip unchanged rebases. When a push only rebased the PR (or retargeted a
+  # stacked PR whose lower PR merged), `git patch-id --stable` of base...head
+  # equals the last complete review's, so the model is not run and the
+  # previous review is carried forward to the new head. Needs checkpoint.
+  skipUnchangedRebase: true
+  # Severity rubric appended to every rule: high/critical ("Important") only
+  # for a demonstrable defect, with the triggering input, the wrong result and
+  # a quote of the code path. "true" uses the built-in text, "false" turns it
+  # off, and any other string replaces the text.
+  severityRubric: "true"
+  # Post an Important finding whose text quotes no code (no `inline code`
+  # span) as a nit. Off by default: it is a heuristic, and on prose-heavy repos
+  # or documentation reviews a correct Important finding often quotes nothing.
+  demoteUnquotedImportant: false
   commands: "/review,/ocr,/open-code-review"
   allowedAssociations: "OWNER,MEMBER,COLLABORATOR"
 

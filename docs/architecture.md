@@ -31,6 +31,7 @@ the queue.
 | `OCR_LLM_*` | endpoint, model, fallback, extra body, timeout |
 | `CHECKPOINT_SHA`, `CHECKPOINT_BASE_SHA` | last fully reviewed head and its base, when the summary has one |
 | `OCR_CHECKPOINT`, `OCR_RESOLVE_OUTDATED`, `OCR_ROUTE_SEVERITY_BELOW`, `OCR_ROUTE_CATEGORIES` | review policy, forwarded only when set |
+| `OCR_NITS_FIRST_ROUND_ONLY`, `OCR_SKIP_UNCHANGED_REBASE`, `OCR_SEVERITY_RUBRIC`, `OCR_DEMOTE_UNQUOTED_IMPORTANT` | convergence, forwarded only when set |
 | `OCR_BACKGROUND` | PR title + description, passed as `--background` |
 | `OCR_INSTRUCTION` | manual `/review <instruction>` text, added as a rule |
 | `OCR_EFFORT`, `OCR_TASK_TIMEOUT`, `OCR_MAX_TOKENS`, `OCR_MAX_TOKENS_BUDGET`, `OCR_MAX_TOOLS`, `OCR_EXCLUDE` | review tuning, forwarded only when set |
@@ -68,6 +69,12 @@ Mirrors PR-Agent so both can be compared:
 - **Routing.** `OCR_ROUTE_SEVERITY_BELOW` / `OCR_ROUTE_CATEGORIES` move
   findings into the summary instead of opening threads; findings with no
   severity or category are never routed.
+- **Convergence.** Nits are posted inline on a PR's first review only
+  (`OCR_NITS_FIRST_ROUND_ONLY`); a rebase with an unchanged `git patch-id`
+  carries the previous review forward (`OCR_SKIP_UNCHANGED_REBASE`); a
+  severity rubric defines Important (`OCR_SEVERITY_RUBRIC`); optionally, an
+  Important finding that quotes no code is posted as a nit
+  (`OCR_DEMOTE_UNQUOTED_IMPORTANT`). See the README.
 - **Outdated threads (GitHub).** `OCR_RESOLVE_OUTDATED=true` resolves the
   bot's own outdated threads that no current finding covers; `report` only
   logs them.

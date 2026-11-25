@@ -19,7 +19,13 @@ import {
   buildSummary,
   checkpointFrom,
   resolveOutdated,
+  previousRound,
+  quotesCode,
+  demoteUnquoted,
+  carryForwardSummary,
+  MARKER,
 } from './post-review.mjs';
+import { parseCheckpoint } from './receiver.mjs';
 
 const run = promisify(execFile);
 const here = path.dirname(new URL(import.meta.url).pathname);
@@ -156,7 +162,7 @@ test('end-to-end poster against a mock GitHub API', async () => {
         start_line: 3,
         end_line: 4,
         severity: 'high',
-        content: 'bad',
+        content: '`load()` with an empty path returns the parent directory',
         suggestion_code: 'ok',
       },
       {
@@ -236,7 +242,7 @@ test('end-to-end poster against a mock Gitea API', async () => {
       start_line: 3,
       end_line: 4,
       severity: 'high',
-      content: 'bad',
+      content: '`parse("")` raises IndexError',
     }],
   }));
 
@@ -437,4 +443,222 @@ test('skip summary explains that nothing was reviewable', () => {
   });
   assert.match(text, /No reviewable code changes/);
   assert.doesNotMatch(text, /model `SGLang`/);
+});
+
+test('previous round: the marker wins, a legacy summary counts once, a skip counts zero', () => {
+  assert.equal(previousRound(undefined), 0);
+  assert.equal(previousRound('unrelated comment'), 0);
+  assert.equal(previousRound(`${MARKER}\nReviewed 3 file(s)`), 1);
+  assert.equal(previousRound(`${MARKER}\nNo reviewable code changes — docs only`), 0);
+  assert.equal(previousRound(`${MARKER}\nReviewed\n<!-- ocr-round: 4 -->`), 4);
+  const text = buildSummary({
+    data: { llm: { model: 'm' }, summary: {} }, posted: 0, total: 0, failed: [], deferred: [], round: 2,
+  });
+  assert.equal(previousRound(text), 2);
+});
+
+test('an Important finding that quotes no code is demoted to a nit', () => {
+  assert.equal(quotesCode({ content: '`foo(0)` returns -1' }), true);
+  assert.equal(quotesCode({ content: 'this might be wrong' }), false);
+  const findings = [
+    { path: 'a.rs', severity: 'high', content: 'could race under load' },
+    { path: 'a.rs', severity: 'critical', content: '`split(",")` drops the last field' },
+    { path: 'a.rs', severity: 'low', content: 'naming' },
+  ];
+  const demoted = demoteUnquoted(findings);
+  assert.equal(demoted[0].severity, 'medium');
+  assert.equal(demoted[0].demoted_from, 'high');
+  assert.equal(demoted[1].severity, 'critical');
+  assert.equal(demoted[2], findings[2]);
+  const { inline } = normalizeFindings(findings, { maxNits: 0, demote: true });
+  assert.deepEqual(inline.map((f) => f.content), ['`split(",")` drops the last field']);
+  assert.equal(normalizeFindings(findings, { maxNits: 0 }).inline.length, 2, 'off without demote');
+});
+
+test('carry-forward moves the checkpoint, keeps the review and replaces an earlier note', () => {
+  const original = buildSummary({
+    data: { status: 'complete', llm: { model: 'm' }, summary: { files_reviewed: 2 } },
+    posted: 1,
+    total: 1,
+    failed: [],
+    deferred: [],
+    round: 1,
+    checkpoint: { head: 'a'.repeat(40), base: 'b'.repeat(40) },
+  });
+  const once = carryForwardSummary(original, {
+    head: 'c'.repeat(40), base: 'd'.repeat(40), previousHead: 'a'.repeat(40),
+  });
+  assert.deepEqual(parseCheckpoint(once), { head: 'c'.repeat(40), base: 'd'.repeat(40) });
+  assert.equal((once.match(/ocr-checkpoint/g) || []).length, 1);
+  assert.match(once, /Rebased, patch unchanged; previous review carried forward/);
+  assert.match(once, /`aaaaaaa` → `ccccccc`/);
+  assert.match(once, /Reviewed 2 file\(s\)/);
+  assert.equal(previousRound(once), 1, 'a carry is not a new round');
+
+  const twice = carryForwardSummary(once, {
+    head: 'e'.repeat(40), base: 'f'.repeat(40), previousHead: 'c'.repeat(40),
+  });
+  assert.equal((twice.match(/carried forward/g) || []).length, 1);
+  assert.deepEqual(parseCheckpoint(twice), { head: 'e'.repeat(40), base: 'f'.repeat(40) });
+});
+
+// A mock GitHub API whose PR already has a sticky summary from `round` reviews.
+const mockGithub = async (stickyBody) => {
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      received.push({ method: req.method, url: req.url, body });
+      const json = (code, payload) => {
+        res.writeHead(code, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+      };
+      if (req.method === 'GET' && req.url.includes('/pulls/1/comments')) return json(200, []);
+      if (req.method === 'GET' && req.url.includes('/issues/1/comments')) {
+        return json(200, stickyBody ? [{ id: 9, body: stickyBody, user: { login: 'bot[bot]' } }] : []);
+      }
+      if (req.method === 'POST' && req.url.includes('/pulls/1/reviews')) return json(200, { id: 2 });
+      if (req.method === 'PATCH' && req.url.includes('/issues/comments/9')) return json(200, { id: 9 });
+      if (req.method === 'POST' && req.url.includes('/issues/1/comments')) return json(200, { id: 3 });
+      if (req.url.includes('/graphql')) return json(200, { data: {} });
+      return json(404, { message: 'not found' });
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { received, server, url: `http://127.0.0.1:${server.address().port}` };
+};
+
+const findingsResult = (dir) => {
+  const result = path.join(dir, 'result.json');
+  fs.writeFileSync(result, JSON.stringify({
+    status: 'complete',
+    llm: { model: 'm' },
+    summary: { files_reviewed: 1 },
+    manifest: { coverage: { failed: [] } },
+    comments: [
+      { path: 'src/a.py', start_line: 3, end_line: 3, severity: 'high', content: '`f(None)` raises TypeError' },
+      { path: 'src/a.py', start_line: 9, end_line: 9, severity: 'low', content: 'rename tmp' },
+      { path: 'src/b.py', start_line: 1, end_line: 1, severity: 'medium', content: 'add a docstring' },
+    ],
+  }));
+  return result;
+};
+
+const postWith = async (url, result, extra = {}) => run(process.execPath, ['post-review.mjs', ...result], {
+  cwd: here,
+  env: {
+    ...process.env,
+    GITHUB_API_URL: url,
+    GITHUB_GRAPHQL_URL: `${url}/graphql`,
+    GIT_TOKEN: 't',
+    REPO: 'o/r',
+    PR_NUMBER: '1',
+    HEAD_SHA: 'abc1234',
+    OCR_INCREMENTAL: 'true',
+    OCR_RECEIVER_URL: '',
+    OCR_REVIEWED_HEAD: 'c'.repeat(40),
+    OCR_BASE_SHA: 'd'.repeat(40),
+    ...extra,
+  },
+});
+
+test('nits once: the first review posts nits inline, later reviews keep them in the summary', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ocr-rounds-'));
+  const result = findingsResult(dir);
+  const inlineOf = (received) => received
+    .filter((r) => r.method === 'POST' && r.url.includes('/reviews'))
+    .flatMap((r) => JSON.parse(r.body).comments.map((c) => c.body));
+  const summaryOf = (received) => JSON.parse(received
+    .find((r) => (r.method === 'PATCH' || r.method === 'POST') && r.url.includes('/issues/')).body).body;
+
+  const first = await mockGithub(null);
+  try {
+    await postWith(first.url, [result]);
+  } finally {
+    first.server.close();
+  }
+  assert.equal(inlineOf(first.received).length, 3);
+  assert.match(summaryOf(first.received), /<!-- ocr-round: 1 -->/);
+
+  const later = await mockGithub(`${MARKER}\nReviewed\n<!-- ocr-round: 1 -->`);
+  try {
+    await postWith(later.url, [result]);
+  } finally {
+    later.server.close();
+  }
+  assert.deepEqual(inlineOf(later.received), ['Important — `f(None)` raises TypeError']);
+  const summary = summaryOf(later.received);
+  assert.match(summary, /<!-- ocr-round: 2 -->/);
+  assert.match(summary, /<details><summary>Nits \(listed here only/);
+  assert.match(summary, /`src\/a\.py` — rename tmp/);
+  assert.match(summary, /`src\/b\.py` — add a docstring/);
+
+  const off = await mockGithub(`${MARKER}\nReviewed\n<!-- ocr-round: 1 -->`);
+  try {
+    await postWith(off.url, [result], { OCR_NITS_FIRST_ROUND_ONLY: 'false' });
+  } finally {
+    off.server.close();
+  }
+  assert.equal(inlineOf(off.received).length, 3);
+});
+
+test('demoting unquoted Important findings is opt-in', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ocr-demote-'));
+  const result = path.join(dir, 'result.json');
+  fs.writeFileSync(result, JSON.stringify({
+    status: 'complete',
+    llm: { model: 'm' },
+    summary: { files_reviewed: 1 },
+    manifest: { coverage: { failed: [] } },
+    comments: [
+      { path: 'docs/a.md', start_line: 2, end_line: 2, severity: 'high', content: 'The install step is wrong' },
+    ],
+  }));
+  const inlineOf = (received) => received
+    .filter((r) => r.method === 'POST' && r.url.includes('/reviews'))
+    .flatMap((r) => JSON.parse(r.body).comments.map((c) => c.body));
+
+  const byDefault = await mockGithub(null);
+  try {
+    await postWith(byDefault.url, [result]);
+  } finally {
+    byDefault.server.close();
+  }
+  assert.deepEqual(inlineOf(byDefault.received), ['Important — The install step is wrong']);
+
+  const enabled = await mockGithub(null);
+  try {
+    await postWith(enabled.url, [result], { OCR_DEMOTE_UNQUOTED_IMPORTANT: 'true' });
+  } finally {
+    enabled.server.close();
+  }
+  assert.deepEqual(inlineOf(enabled.received), ['Nit — The install step is wrong']);
+});
+
+test('--carry-forward patches the sticky summary and posts no review', async () => {
+  const sticky = `${MARKER}\n### 🤖 OpenCodeReview\n\nReviewed 2 file(s)\n\n<!-- ocr-round: 1 -->\n\n`
+    + `<!-- ocr-checkpoint: ${'a'.repeat(40)} base=${'b'.repeat(40)} -->`;
+  const api = await mockGithub(sticky);
+  try {
+    await postWith(api.url, ['--carry-forward'], { CHECKPOINT_SHA: 'a'.repeat(40) });
+  } finally {
+    api.server.close();
+  }
+  assert.equal(api.received.some((r) => r.url.includes('/reviews')), false);
+  const patch = api.received.find((r) => r.method === 'PATCH');
+  const body = JSON.parse(patch.body).body;
+  assert.deepEqual(parseCheckpoint(body), { head: 'c'.repeat(40), base: 'd'.repeat(40) });
+  assert.match(body, /carried forward/);
+
+  const empty = await mockGithub(null);
+  try {
+    await assert.rejects(
+      postWith(empty.url, ['--carry-forward'], { CHECKPOINT_SHA: 'a'.repeat(40) }),
+      /no sticky summary/,
+    );
+  } finally {
+    empty.server.close();
+  }
+  assert.equal(empty.received.some((r) => r.method === 'POST'), false);
 });

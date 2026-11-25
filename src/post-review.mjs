@@ -1,7 +1,12 @@
 // Post an OpenCodeReview JSON result back to a GitHub or Gitea pull request.
 //
 // Policy parity with PR-Agent:
-//  - severity prefixes (Important / Nit), Important first, max N nits inline;
+//  - severity prefixes (Important / Nit), Important first, max N nits inline
+//    on the first review and none on later ones (OCR_NITS_FIRST_ROUND_ONLY);
+//  - optionally, an Important finding that quotes no code is demoted to a nit
+//    (OCR_DEMOTE_UNQUOTED_IMPORTANT, off by default);
+//  - `--carry-forward` moves the checkpoint to a rebased, patch-identical head
+//    without a review (run-review.sh decides; OCR_SKIP_UNCHANGED_REBASE);
 //  - one finding per root cause (path + category + snippet);
 //  - generated/lockfile/vendor paths dropped;
 //  - incremental inline dedupe against existing bot review comments;
@@ -17,6 +22,15 @@ const DEFAULT_API = 'https://api.github.com';
 export const MARKER = '<!-- ocr-summary -->';
 // Machine-readable cross-push checkpoint embedded in the sticky summary.
 export const CHECKPOINT_PREFIX = '<!-- ocr-checkpoint:';
+const CHECKPOINT_LINE_RE = /^<!--\s*ocr-checkpoint:[^>]*-->\s*$/gm;
+// How many reviews of this PR actually ran the model. Round 1 may post nits
+// inline; later rounds keep them in the summary (OCR_NITS_FIRST_ROUND_ONLY).
+export const ROUND_RE = /<!--\s*ocr-round:\s*(\d+)\s*-->/;
+// A rebase that left the patch unchanged carries the previous review forward
+// instead of re-running the model; this line says so in the summary.
+const CARRIED_MARKER = '<!-- ocr-carried -->';
+const CARRIED_LINE_RE = /^<!-- ocr-carried -->.*$\n?/gm;
+const SKIP_TEXT = 'No reviewable code changes';
 
 // Cap every "details" list in the sticky summary so one pathological run cannot
 // turn the comment into hundreds of lines.
@@ -60,6 +74,19 @@ export const dedupeFindings = (findings) => {
   return [...seen.values()];
 };
 
+// An Important finding must quote the code path it is about (the severity
+// rubric in run-review.sh asks for that). One whose text carries no inline code
+// span is demoted to a nit (`medium`), so speculative "could be" findings stop
+// opening must-answer threads. Opt-in (OCR_DEMOTE_UNQUOTED_IMPORTANT).
+export const quotesCode = (finding) =>
+  /`[^`\n]+`/.test(String(finding?.content || finding?.message || ''));
+
+export const demoteUnquoted = (findings) => findings.map((finding) => (
+  finding && severityRank(finding.severity) >= 3 && !quotesCode(finding)
+    ? { ...finding, severity: 'medium', demoted_from: finding.severity }
+    : finding
+));
+
 export const normalizeFindings = (
   findings,
   {
@@ -67,9 +94,10 @@ export const normalizeFindings = (
     skipPatterns = DEFAULT_SKIP,
     routeSeverityBelow = '',
     routeCategories = [],
+    demote = false,
   } = {},
 ) => {
-  const relevant = findings.filter(
+  const relevant = (demote ? demoteUnquoted(findings) : findings).filter(
     (finding) => finding && finding.path && !shouldSkipPath(finding.path, skipPatterns),
   );
   const unique = dedupeFindings(relevant).sort(
@@ -152,7 +180,20 @@ export const overlaps = (a, b) => {
 export const filterIncremental = (comments, existing) =>
   comments.filter((comment) => !existing.some((previous) => overlaps(comment, previous)));
 
-export const buildSummary = ({ data, posted, total, failed, deferred, checkpoint }) => {
+// Reviews of this PR that ran before, read from the sticky summary. A sticky
+// written before the round marker existed counts as one review unless it was
+// the "nothing reviewable" summary.
+export const previousRound = (body) => {
+  const text = String(body || '');
+  if (!text.includes(MARKER)) return 0;
+  const match = ROUND_RE.exec(text);
+  if (match) return Number(match[1]);
+  return text.includes(SKIP_TEXT) ? 0 : 1;
+};
+
+export const buildSummary = ({
+  data, posted, total, failed, deferred, checkpoint, round = 0, nitsSummaryOnly = false,
+}) => {
   const summary = data.summary || {};
   const model = data.llm?.model || '';
   const skipped = /no items were selected/i.test(String(data.message || ''));
@@ -163,7 +204,7 @@ export const buildSummary = ({ data, posted, total, failed, deferred, checkpoint
   ];
   if (skipped) {
     lines.push(
-      'No reviewable code changes — this PR only touches docs, generated files, '
+      `${SKIP_TEXT} — this PR only touches docs, generated files, `
       + 'or file types OCR does not review.',
     );
   } else if (data.message) {
@@ -220,7 +261,10 @@ export const buildSummary = ({ data, posted, total, failed, deferred, checkpoint
     lines.push('', '</details>');
   }
   if (deferred.length > 0) {
-    lines.push('', '<details><summary>Additional findings</summary>', '');
+    const title = nitsSummaryOnly
+      ? 'Nits (listed here only: inline threads are opened for nits on the first review)'
+      : 'Additional findings';
+    lines.push('', `<details><summary>${title}</summary>`, '');
     for (const finding of deferred) {
       lines.push(
         `- \`${finding.path}\` — ${String(finding.content || finding.message || '').trim()}`,
@@ -231,10 +275,30 @@ export const buildSummary = ({ data, posted, total, failed, deferred, checkpoint
   // Cross-push checkpoint. Written only when the run reviewed everything it
   // selected, so the next push can review <checkpoint>..<head> instead of the
   // whole merge-base range. Absent => next run falls back to the full range.
+  if (round > 0) lines.push('', `<!-- ocr-round: ${round} -->`);
   if (checkpoint?.head && checkpoint?.base) {
     lines.push('', `${CHECKPOINT_PREFIX} ${checkpoint.head} base=${checkpoint.base} -->`);
   }
   return lines.join('\n');
+};
+
+// Carry a previous review forward to a rebased head whose patch is unchanged
+// (run-review.sh compared `git patch-id --stable` of base...head): move the
+// checkpoint to the new head/base and say why no review ran. Everything else in
+// the summary, including the round marker, is kept.
+export const carryForwardSummary = (body, { head, base, previousHead }) => {
+  const short = (sha) => String(sha || '').slice(0, 7);
+  const note = `${CARRIED_MARKER} _Rebased, patch unchanged; previous review carried forward_`
+    + ` (\`${short(previousHead)}\` → \`${short(head)}\`, base \`${short(base)}\`).`;
+  const lines = String(body || '')
+    .replace(CHECKPOINT_LINE_RE, '')
+    .replace(CARRIED_LINE_RE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd()
+    .split('\n');
+  const header = lines.findIndex((line) => line.startsWith('### '));
+  lines.splice(header >= 0 ? header + 1 : lines.length, 0, '', note);
+  return `${lines.join('\n').replace(/\n{3,}/g, '\n\n')}\n\n${CHECKPOINT_PREFIX} ${head} base=${base} -->`;
 };
 
 const apiRequest = async (api, provider, token, path, opts = {}) => {
@@ -401,6 +465,69 @@ export const checkpointFrom = (data, env = process.env) => {
   return { head: env.OCR_REVIEWED_HEAD, base: env.OCR_BASE_SHA };
 };
 
+const flag = (env, name, fallback = true) => {
+  const value = String(env[name] ?? '').trim().toLowerCase();
+  if (!value) return fallback;
+  return value !== 'false' && value !== '0' && value !== 'no';
+};
+
+const findSticky = async (api, provider, token, repo, pr) => {
+  const issueComments = await apiRequest(api, provider, token, `/repos/${repo}/issues/${pr}/comments?per_page=100`);
+  return (issueComments || []).find((comment) => String(comment.body || '').includes(MARKER));
+};
+
+const writeSticky = async (api, provider, token, repo, pr, sticky, body) => {
+  if (sticky) {
+    await apiRequest(api, provider, token, `/repos/${repo}/issues/comments/${sticky.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    });
+  } else {
+    await apiRequest(api, provider, token, `/repos/${repo}/issues/${pr}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    });
+  }
+};
+
+const sendReport = async (payload) => {
+  const receiver = process.env.OCR_RECEIVER_URL;
+  if (!receiver) return;
+  try {
+    await fetch(`${receiver.replace(/\/$/, '')}/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.error(`report failed: ${err.message}`);
+  }
+};
+
+// `post-review.mjs --carry-forward`: the head was rebased without changing its
+// patch. Update the existing sticky summary instead of posting a review; exit
+// non-zero when there is no summary to carry, so run-review.sh reviews instead.
+async function carryForward({ api, provider, token, repo, pr }) {
+  const head = process.env.OCR_REVIEWED_HEAD;
+  const base = process.env.OCR_BASE_SHA;
+  const previousHead = process.env.CHECKPOINT_SHA;
+  if (!head || !base) {
+    console.error('carry-forward: missing OCR_REVIEWED_HEAD/OCR_BASE_SHA');
+    process.exit(1);
+  }
+  const sticky = await findSticky(api, provider, token, repo, pr);
+  if (!sticky) {
+    console.error('carry-forward: no sticky summary to carry forward');
+    process.exit(1);
+  }
+  const body = carryForwardSummary(sticky.body, { head, base, previousHead });
+  await writeSticky(api, provider, token, repo, pr, sticky, body);
+  await sendReport({ repo, pr: Number(pr), status: 'carried', tokens: 0, findings: 0, posted: 0 });
+  console.error(`carry-forward: summary checkpoint moved ${String(previousHead).slice(0, 7)} -> ${head.slice(0, 7)}`);
+}
+
 export async function main() {
   const provider = process.env.GIT_PROVIDER || 'github';
   const api = provider === 'gitea'
@@ -416,12 +543,36 @@ export async function main() {
     process.exit(1);
   }
 
+  if (process.argv[2] === '--carry-forward') {
+    await carryForward({ api, provider, token, repo, pr });
+    return;
+  }
+
   const resultPath = process.argv[2] || '/tmp/result.json';
   const data = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
   const findings = Array.isArray(data.comments) ? data.comments : [];
 
+  // Nits once: the first review of a PR may open nit threads; every later one
+  // (any push after a summary exists) opens threads only for Important findings
+  // and lists its nits in the summary. Otherwise each fix commit draws a fresh
+  // round of up to OCR_MAX_NITS threads and the review never converges.
+  let sticky = null;
+  try {
+    sticky = await findSticky(api, provider, token, repo, pr);
+  } catch (err) {
+    console.error(`sticky lookup failed (${err.message}); treating as the first review`);
+  }
+  const prior = previousRound(sticky?.body);
+  const ranModel = !/no items were selected/i.test(String(data.message || ''));
+  const round = ranModel ? prior + 1 : prior;
+  const nitsSummaryOnly = prior >= 1 && flag(process.env, 'OCR_NITS_FIRST_ROUND_ONLY');
+  if (nitsSummaryOnly) console.error(`round ${round}: nits go to the summary only`);
+
   const { inline: selected, deferred } = normalizeFindings(findings, {
-    maxNits: Number(process.env.OCR_MAX_NITS || 3),
+    maxNits: nitsSummaryOnly ? 0 : Number(process.env.OCR_MAX_NITS || 3),
+    // Off by default: on prose-heavy repos and doc reviews a correct Important
+    // finding often quotes no code, so the heuristic would demote it.
+    demote: flag(process.env, 'OCR_DEMOTE_UNQUOTED_IMPORTANT', false),
     routeSeverityBelow: process.env.OCR_ROUTE_SEVERITY_BELOW || '',
     routeCategories: (process.env.OCR_ROUTE_CATEGORIES || '')
       .split(',')
@@ -474,23 +625,13 @@ export async function main() {
   const checkpoint = checkpointFrom(data);
 
   const summaryBody = buildSummary({
-    data, posted, total: findings.length, failed, deferred, checkpoint,
+    data, posted, total: findings.length, failed, deferred, checkpoint, round, nitsSummaryOnly,
   });
-  const issueComments = await apiRequest(api, provider, token, `/repos/${repo}/issues/${pr}/comments?per_page=100`);
-  const sticky = (issueComments || []).find((comment) => String(comment.body || '').includes(MARKER));
-  if (sticky) {
-    await apiRequest(api, provider, token, `/repos/${repo}/issues/comments/${sticky.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body: summaryBody }),
-    });
-  } else {
-    await apiRequest(api, provider, token, `/repos/${repo}/issues/${pr}/comments`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body: summaryBody }),
-    });
-  }
+  // Re-read: the sticky may have been created since the lookup above (two jobs
+  // for one PR), and a failed lookup must not create a second summary.
+  const current = await findSticky(api, provider, token, repo, pr);
+  await writeSticky(api, provider, token, repo, pr, current, summaryBody);
+  sticky = current;
 
   try {
     let botLogin = sticky?.user?.login;
@@ -512,26 +653,15 @@ export async function main() {
     console.error(`resolve_outdated skipped: ${err.message}`);
   }
 
-  const receiver = process.env.OCR_RECEIVER_URL;
-  if (receiver) {
-    try {
-      await fetch(`${receiver.replace(/\/$/, '')}/report`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repo,
-          pr: Number(pr),
-          status: data.status || 'success',
-          tokens: data.summary?.total_tokens,
-          elapsed: data.summary?.elapsed,
-          findings: findings.length,
-          posted,
-        }),
-      });
-    } catch (err) {
-      console.error(`report failed: ${err.message}`);
-    }
-  }
+  await sendReport({
+    repo,
+    pr: Number(pr),
+    status: data.status || 'success',
+    tokens: data.summary?.total_tokens,
+    elapsed: data.summary?.elapsed,
+    findings: findings.length,
+    posted,
+  });
 
   console.error(
     `posted ${posted}/${inline.length} inline comments; summary ${sticky ? 'updated' : 'created'}`,

@@ -34,6 +34,10 @@ data:
   OCR_RESOLVE_OUTDATED: {{ .Values.policy.resolveOutdated | quote }}
   OCR_ROUTE_SEVERITY_BELOW: {{ .Values.policy.routeSeverityBelow | quote }}
   OCR_ROUTE_CATEGORIES: {{ .Values.policy.routeCategories | quote }}
+  OCR_NITS_FIRST_ROUND_ONLY: {{ .Values.policy.nitsFirstRoundOnly | quote }}
+  OCR_SKIP_UNCHANGED_REBASE: {{ .Values.policy.skipUnchangedRebase | quote }}
+  OCR_SEVERITY_RUBRIC: {{ .Values.policy.severityRubric | quote }}
+  OCR_DEMOTE_UNQUOTED_IMPORTANT: {{ .Values.policy.demoteUnquotedImportant | quote }}
   OCR_COMMANDS: {{ .Values.policy.commands | quote }}
   OCR_ALLOWED_ASSOCIATIONS: {{ .Values.policy.allowedAssociations | quote }}
   OCR_PROVIDERS: {{ include "ocr-bridge.providers" . | quote }}
