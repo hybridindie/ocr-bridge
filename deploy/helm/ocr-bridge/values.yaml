@@ -99,6 +99,26 @@ policy:
   # Comma-separated globs that bypass OCR's extension allowlist, e.g.
   # "**/*.gd" for GDScript or "**/*.md" for docs. Empty by default.
   include: ""
+  # Globs added to the base rule file's `exclude`, e.g. mirrored agent config
+  # that produces every finding twice: "**/.claude/**,**/.opencode/**".
+  exclude: ""
+  # Review tuning. Empty = the CLI default, and the flag is not passed at all.
+  #   effort           --effort low|medium|high (1/2/3 review rounds; default
+  #                    medium). Token cost is roughly proportional.
+  #   taskTimeout      --timeout, minutes per subtask (default 15, scaled by
+  #                    effort). The LLM request timeout is llm.timeout.
+  #   maxTokens        --max-tokens, prompt ceiling per subtask. Set it below
+  #                    your model's context window (the CLI default is 200k).
+  #   maxTokensBudget  --max-tokens-budget, total input+output cap per review.
+  #                    Checked before every LLM round; over-budget files are
+  #                    reported as failed(budget). A runaway guard: set it
+  #                    above your largest normal review, e.g. "5000000".
+  #   maxTools         --max-tools, tool-call rounds per subtask.
+  effort: ""
+  taskTimeout: ""
+  maxTokens: ""
+  maxTokensBudget: ""
+  maxTools: ""
   commands: "/review,/ocr,/open-code-review"
   allowedAssociations: "OWNER,MEMBER,COLLABORATOR"
 

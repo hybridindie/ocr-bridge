@@ -29,7 +29,9 @@ the queue.
 | `REPO`, `PR_NUMBER`, `BASE_REF`, `HEAD_SHA` | review target |
 | `GITEA_API_URL`, `GITEA_BOT_LOGIN` | Gitea posting |
 | `OCR_LLM_*` | endpoint, model, fallback, extra body, timeout |
-| `OCR_PR_BODY`, `OCR_INSTRUCTION` | rule inputs |
+| `OCR_BACKGROUND` | PR title + description, passed as `--background` |
+| `OCR_INSTRUCTION` | manual `/review <instruction>` text, added as a rule |
+| `OCR_EFFORT`, `OCR_TASK_TIMEOUT`, `OCR_MAX_TOKENS`, `OCR_MAX_TOKENS_BUDGET`, `OCR_MAX_TOOLS`, `OCR_EXCLUDE` | review tuning, forwarded only when set |
 
 `GIT_TOKEN`, `OCR_LLM_TOKEN` and LLM values are env vars inside the Job pod;
 Kubernetes Secrets are mounted as env, not files, for the token.
@@ -39,9 +41,12 @@ Kubernetes Secrets are mounted as env, not files, for the token.
 Mirrors PR-Agent so both can be compared:
 
 - **Rules from the base ref.** `.opencodereview/rule.json` is read from the
-  *base*, never the PR head, so a PR cannot weaken the rules. One extra `**`
-  rule is built from the PR body and the manual command text
-  (`merge_system_rule: true`), preserving the built-in rules.
+  *base*, never the PR head, so a PR cannot weaken the rules. A manual
+  `/review <instruction>` adds one `**` rule (`merge_system_rule: true`),
+  preserving the built-in rules. `OCR_EXCLUDE` globs are merged into the rule
+  file's `exclude`.
+- **Context.** The PR title and description go through `--background`, not a
+  rule, clamped to OCR's recommended 2000 characters.
 - **Severity.** `critical`/`high` → `Important —`, `medium`/`low` →
   `Nit —`; Important first; at most `OCR_MAX_NITS` nits inline.
 - **Dedupe.** One finding per `path + category + existing code`.
@@ -55,7 +60,10 @@ Mirrors PR-Agent so both can be compared:
 - **Incremental.** Inline findings already posted by the bot are skipped.
   GitHub compares line intervals; Gitea compares the rendered body per path.
 - **Summary.** One sticky comment with `<!-- ocr-summary -->`, updated in place;
-  findings that cannot be anchored inline are listed there.
+  findings that cannot be anchored inline are listed there, and so are the
+  files a partial run did not review (`manifest.coverage.failed`, with the
+  classification and reason) and the reviewer's `warnings[]`. Cached tokens are
+  shown when the provider reports them.
 
 ## Metrics
 

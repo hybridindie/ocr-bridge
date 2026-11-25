@@ -241,9 +241,30 @@ export async function giteaCanReview(cfg, repo, login) {
   }
 }
 
+// OCR recommends at most 2000 characters of background context (it hard-fails
+// above 8000 for files and quality degrades past the soft limit), so the PR
+// title/body is truncated here rather than in the job.
+export const BACKGROUND_LIMIT = 2000;
+
+// buildBackground folds the PR title and description into the single
+// `ocr review --background` string: title first (semantic titles like
+// `feat(auth): …` summarise the intent), then the body, truncated at a line or
+// word boundary so a long description cannot blow past the recommended size.
+export function buildBackground({ title, body } = {}, limit = BACKGROUND_LIMIT) {
+  const text = [title, body]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit - 1);
+  const lineBreak = cut.lastIndexOf('\n');
+  const boundary = lineBreak > limit * 0.6 ? lineBreak : cut.lastIndexOf(' ');
+  return `${(boundary > 0 ? cut.slice(0, boundary) : cut).trimEnd()}…`;
+}
+
 export function buildJob({
   repo, pr, base, head, token, provider = 'github',
-  manual = false, instruction, prBody, cfg = config(), now = Date.now(),
+  manual = false, instruction, prTitle, prBody, cfg = config(), now = Date.now(),
 }) {
   const stem = `ocr-${slug(repo.replace('/', '-'))}-${pr}-${head.slice(0, 7)}`;
   const name = (manual ? `${stem}-${now.toString(36)}` : stem).slice(0, 63);
@@ -291,8 +312,18 @@ export function buildJob({
   if (process.env.OCR_LLM_TIMEOUT) {
     env.push({ name: 'OCR_LLM_TIMEOUT', value: process.env.OCR_LLM_TIMEOUT });
   }
+  // Review tuning knobs: forwarded only when set, so the CLI defaults
+  // (effort=medium, 15-minute task budget, unlimited tokens) still apply.
+  for (const key of [
+    'OCR_EFFORT', 'OCR_TASK_TIMEOUT', 'OCR_MAX_TOKENS_BUDGET', 'OCR_MAX_TOKENS',
+    'OCR_MAX_TOOLS', 'OCR_EXCLUDE',
+  ]) {
+    const value = process.env[key];
+    if (value) env.push({ name: key, value });
+  }
   if (instruction) env.push({ name: 'OCR_INSTRUCTION', value: instruction });
-  if (prBody) env.push({ name: 'OCR_PR_BODY', value: String(prBody).slice(0, 6000) });
+  const background = buildBackground({ title: prTitle, body: prBody });
+  if (background) env.push({ name: 'OCR_BACKGROUND', value: background });
 
   return {
     apiVersion: 'batch/v1',
@@ -485,6 +516,7 @@ async function handle(provider, event, payload) {
       base: payload.pull_request?.base?.ref,
       head: payload.pull_request?.head?.sha,
       token: isGitea ? cfg.giteaToken : await installationToken(repo, cfg),
+      prTitle: payload.pull_request?.title,
       prBody: payload.pull_request?.body,
     });
     return;
@@ -532,6 +564,7 @@ async function handle(provider, event, payload) {
       token,
       manual: true,
       instruction: parsed.instruction || undefined,
+      prTitle: pr.title,
       prBody: pr.body,
     });
   }

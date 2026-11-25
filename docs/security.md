@@ -39,8 +39,10 @@
   not executed.
 - The Job checks out PR code to *read* it. `ocr review` parses files; the bridge
   does not run repository scripts or tests.
-- The PR-body rule is additive (`merge_system_rule: true`) and cannot remove the
-  built-in rules; base-ref rules prevent a PR from weakening policy.
+- The PR title and description are passed as `--background` context, not as a
+  rule, and are clamped to 2000 characters. The manual-instruction rule is
+  additive (`merge_system_rule: true`) and cannot remove the built-in rules;
+  base-ref rules prevent a PR from weakening policy.
 
 - The Job image sets `OCR_NO_UPDATE=1`; the CLI must not install packages at
   runtime.
