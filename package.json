@@ -1,6 +1,6 @@
 {
   "name": "ocr-bridge",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Webhook bridge that runs OpenCodeReview on GitHub App and Gitea pull requests as ephemeral Kubernetes Jobs.",
   "license": "MIT",

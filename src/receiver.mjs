@@ -318,7 +318,8 @@ export function buildJob({
   for (const key of [
     'OCR_EFFORT', 'OCR_TASK_TIMEOUT', 'OCR_MAX_TOKENS_BUDGET', 'OCR_MAX_TOKENS',
     'OCR_MAX_TOOLS', 'OCR_EXCLUDE', 'OCR_ROUTE_SEVERITY_BELOW', 'OCR_ROUTE_CATEGORIES',
-    'OCR_RESOLVE_OUTDATED', 'OCR_CHECKPOINT',
+    'OCR_RESOLVE_OUTDATED', 'OCR_CHECKPOINT', 'OCR_NITS_FIRST_ROUND_ONLY',
+    'OCR_SKIP_UNCHANGED_REBASE', 'OCR_SEVERITY_RUBRIC', 'OCR_DEMOTE_UNQUOTED_IMPORTANT',
   ]) {
     const value = process.env[key];
     if (value) env.push({ name: key, value });

@@ -7,7 +7,9 @@
 #           OCR_LLM_TIMEOUT, OCR_CONCURRENCY, OCR_LANGUAGE, OCR_BACKGROUND,
 #           OCR_EFFORT, OCR_TASK_TIMEOUT, OCR_MAX_TOKENS_BUDGET, OCR_MAX_TOKENS,
 #           OCR_MAX_TOOLS, OCR_EXCLUDE, OCR_ROUTE_SEVERITY_BELOW, OCR_ROUTE_CATEGORIES,
-#           OCR_RESOLVE_OUTDATED, OCR_CHECKPOINT, CHECKPOINT_SHA, CHECKPOINT_BASE_SHA.
+#           OCR_RESOLVE_OUTDATED, OCR_CHECKPOINT, CHECKPOINT_SHA, CHECKPOINT_BASE_SHA,
+#           OCR_SKIP_UNCHANGED_REBASE, OCR_SEVERITY_RUBRIC, OCR_NITS_FIRST_ROUND_ONLY,
+#           OCR_DEMOTE_UNQUOTED_IMPORTANT, OCR_TMPDIR, OCR_WORKDIR, OCR_POSTER.
 set -uo pipefail
 
 log() { printf '[ocr-job] %s\n' "$*" >&2; }
@@ -15,8 +17,14 @@ log() { printf '[ocr-job] %s\n' "$*" >&2; }
 : "${GIT_TOKEN:?}" "${REPO:?}" "${PR_NUMBER:?}" "${BASE_REF:?}" "${HEAD_SHA:?}"
 : "${OCR_LLM_URL:?}" "${OCR_LLM_MODEL:?}" "${OCR_LLM_TOKEN:?}"
 
+# Scratch paths. The defaults are the Job's; the overrides exist for
+# run-review.test.mjs, which runs this script against a local origin.
+TMPD="${OCR_TMPDIR:-/tmp}"
+POSTER="${OCR_POSTER:-/usr/local/bin/post-review.mjs}"
+export OCR_TMPDIR="$TMPD"
+
 # ocr config set writes under $HOME; keep it writable and ephemeral.
-export HOME=/tmp/ocr-home
+export HOME="$TMPD/ocr-home"
 mkdir -p "$HOME/.opencodereview"
 
 ocr config set llm.url "$OCR_LLM_URL"
@@ -33,7 +41,7 @@ if [ -n "${OCR_LLM_TIMEOUT:-}" ]; then
   ocr config set llm.timeout_sec "$OCR_LLM_TIMEOUT"
 fi
 
-WORK=/workspace
+WORK="${OCR_WORKDIR:-/workspace}"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 cd "$WORK"
@@ -76,6 +84,47 @@ REVIEWED_HEAD="$(git rev-parse "refs/remotes/origin/pr-${PR_NUMBER}")"
 export OCR_BASE_SHA="$BASE_SHA"
 export OCR_REVIEWED_HEAD="$REVIEWED_HEAD"
 
+is_off() { case "${1:-}" in false|0|no|FALSE|False) return 0 ;; *) return 1 ;; esac; }
+
+# The patch a PR proposes: base...head (merge-base to head) through
+# `git patch-id --stable`, which ignores commit ids, messages, line numbers and
+# file order. Empty output for an empty diff.
+patch_id() {
+  git diff --no-color --no-ext-diff "$1...$2" 2>/dev/null | git patch-id --stable | awk '{print $1}'
+}
+
+ensure_commit() {
+  git cat-file -e "$1^{commit}" 2>/dev/null \
+    || git fetch -q --no-tags origin "$1" >/dev/null 2>&1 || true
+  git cat-file -e "$1^{commit}" 2>/dev/null
+}
+
+# Skip unchanged rebases. A push that only rebased the PR (onto a newer base,
+# or a stacked PR retargeted onto main after its lower PR squash-merged)
+# proposes the same patch as the head the last complete review covered. Then
+# re-running the model only re-files old findings, so move the checkpoint to the
+# new head and stop. Any doubt (no checkpoint, unfetchable commits, an empty or
+# different patch, a failed summary update) falls through to a normal review.
+if ! is_off "${OCR_SKIP_UNCHANGED_REBASE:-true}" \
+  && [ -n "${CHECKPOINT_SHA:-}" ] && [ -n "${CHECKPOINT_BASE_SHA:-}" ] \
+  && [ "$REVIEWED_HEAD" = "$HEAD_SHA" ] && [ "$CHECKPOINT_SHA" != "$REVIEWED_HEAD" ]; then
+  if ensure_commit "$CHECKPOINT_SHA" && ensure_commit "$CHECKPOINT_BASE_SHA"; then
+    OLD_PATCH="$(patch_id "$CHECKPOINT_BASE_SHA" "$CHECKPOINT_SHA")"
+    NEW_PATCH="$(patch_id "$BASE_SHA" "$REVIEWED_HEAD")"
+    if [ -n "$NEW_PATCH" ] && [ "$OLD_PATCH" = "$NEW_PATCH" ]; then
+      log "rebased, patch unchanged (patch-id ${NEW_PATCH:0:12}); carrying review of ${CHECKPOINT_SHA:0:7} forward"
+      if CHECKPOINT_SHA="$CHECKPOINT_SHA" node "$POSTER" --carry-forward; then
+        exit 0
+      fi
+      log "carry-forward failed; reviewing instead"
+    else
+      log "patch changed since ${CHECKPOINT_SHA:0:7} (patch-id ${OLD_PATCH:0:12} -> ${NEW_PATCH:0:12})"
+    fi
+  else
+    log "checkpoint commits unavailable; cannot compare patches"
+  fi
+fi
+
 # Cross-push checkpoint: the previous run left the head it fully covered in the
 # sticky summary. Review only checkpoint..head when the repo state still proves
 # that range is complete: the base has not moved, the webhook head is what we
@@ -105,22 +154,43 @@ log "reviewing ${REPO}#${PR_NUMBER} (${FROM_REF}...${HEAD_SHA})"
 #    the built-in system rules. The PR title/description is *not* a rule: it goes
 #    through `--background` (OCR's documented channel for requirement context).
 if git cat-file -e "origin/${BASE_REF}:.opencodereview/rule.json" 2>/dev/null; then
-  git show "origin/${BASE_REF}:.opencodereview/rule.json" > /tmp/base-rule.json
+  git show "origin/${BASE_REF}:.opencodereview/rule.json" > "$TMPD/base-rule.json"
 else
-  printf '{"rules":[]}' > /tmp/base-rule.json
+  printf '{"rules":[]}' > "$TMPD/base-rule.json"
 fi
-OCR_INSTRUCTION="${OCR_INSTRUCTION:-}" node -e '
+OCR_INSTRUCTION="${OCR_INSTRUCTION:-}" OCR_SEVERITY_RUBRIC="${OCR_SEVERITY_RUBRIC:-true}" node -e '
 const fs = require("fs");
 let base = { rules: [] };
 try {
-  base = JSON.parse(fs.readFileSync("/tmp/base-rule.json", "utf8"));
+  base = JSON.parse(fs.readFileSync(process.env.OCR_TMPDIR + "/base-rule.json", "utf8"));
 } catch (err) {
   console.error("ignoring invalid base rule.json: " + err.message);
 }
-const rules = Array.isArray(base.rules) ? base.rules : [];
-const extra = (process.env.OCR_INSTRUCTION || "").trim();
-if (extra) {
-  rules.push({ path: "**", merge_system_rule: true, rule: extra });
+// Severity rubric. The OCR CLI defines no meaning for its severity enum, and the
+// poster maps high/critical to "Important" threads that must be answered before
+// merge. Without a bar the model files speculative findings as Important.
+// "false" disables it; any other non-boolean value replaces the default text.
+const DEFAULT_RUBRIC = [
+  "Severity rubric (applies to every finding).",
+  "Use severity high or critical only for a defect you can demonstrate: name the concrete input, state or call sequence that triggers it, state the wrong result it produces (a wrong value, crash, hang, data loss or security exposure), and quote the code path that produces it in backticks.",
+  "A finding that lacks any of the three is severity medium or low. So are style, naming, duplication, comments and documentation, test structure, missing tests, and risks phrased as could, might or consider.",
+  "When unsure, choose medium.",
+].join(" ");
+const rubricSetting = (process.env.OCR_SEVERITY_RUBRIC || "true").trim();
+const rubric = /^(false|0|no)$/i.test(rubricSetting)
+  ? ""
+  : (/^(true|1|yes)$/i.test(rubricSetting) ? DEFAULT_RUBRIC : rubricSetting);
+// OCR applies the first rule whose path matches a file, so text meant for
+// every file (the rubric, a manual `/review <instruction>`) is appended to each
+// rule and to a trailing catch-all for files no rule covers.
+const shared = [rubric, (process.env.OCR_INSTRUCTION || "").trim()].filter(Boolean).join("\n\n");
+const rules = (Array.isArray(base.rules) ? base.rules : []).map((entry) => (
+  shared && entry && typeof entry === "object"
+    ? { ...entry, rule: [entry.rule, shared].filter(Boolean).join("\n\n") }
+    : entry
+));
+if (shared) {
+  rules.push({ path: "**", merge_system_rule: true, rule: shared });
 }
 // The OCR allowlist rejects some extensions outright (e.g. .gd). An include
 // pattern bypasses the unsupported_ext/default_path gates, so operators can opt
@@ -141,9 +211,9 @@ if (include.length > 0) {
 if (exclude.length > 0) {
   merged.exclude = [...new Set([...(Array.isArray(base.exclude) ? base.exclude : []), ...exclude])];
 }
-fs.writeFileSync("/tmp/rule.json", JSON.stringify(merged));
+fs.writeFileSync(process.env.OCR_TMPDIR + "/rule.json", JSON.stringify(merged));
 '
-RULE_ARGS=(--rule /tmp/rule.json)
+RULE_ARGS=(--rule "$TMPD/rule.json")
 
 # Requirement/business context (PR title + description) goes through
 # `--background`, which OCR injects into the plan and main prompts. The receiver
@@ -170,18 +240,18 @@ do_review() {
     --to "origin/pr-${PR_NUMBER}" \
     --format json \
     --audience agent \
-    --output /tmp/result.json \
+    --output "$TMPD/result.json" \
     --concurrency "${OCR_CONCURRENCY:-8}" \
     "${TUNING_ARGS[@]}" \
     "${BACKGROUND_ARGS[@]}" \
     "${RULE_ARGS[@]}" \
-    >/tmp/ocr.stdout 2>/tmp/ocr.stderr
+    >"$TMPD/ocr.stdout" 2>"$TMPD/ocr.stderr"
 }
 
 set +e
 do_review
 rc=$?
-if [ "${rc}" -ne 0 ] || [ ! -s /tmp/result.json ]; then
+if [ "${rc}" -ne 0 ] || [ ! -s "$TMPD/result.json" ]; then
   if [ -n "${OCR_LLM_FALLBACK_MODEL:-}" ]; then
     log "primary review failed (rc=${rc}); retrying with ${OCR_LLM_FALLBACK_MODEL}"
     ocr config set llm.model "${OCR_LLM_FALLBACK_MODEL}"
@@ -191,12 +261,12 @@ if [ "${rc}" -ne 0 ] || [ ! -s /tmp/result.json ]; then
 fi
 set -e
 
-tail -n 40 /tmp/ocr.stderr >&2 || true
+tail -n 40 "$TMPD/ocr.stderr" >&2 || true
 
-if [ ! -s /tmp/result.json ]; then
+if [ ! -s "$TMPD/result.json" ]; then
   log "no result JSON produced (ocr rc=${rc})"
   exit "${rc:-1}"
 fi
 
 log "posting review (ocr rc=${rc})"
-node /usr/local/bin/post-review.mjs /tmp/result.json
+node "$POSTER" "$TMPD/result.json"

@@ -32,6 +32,9 @@ OpenAI-compatible LLM endpoint (vLLM, LiteLLM, MLflow AI Gateway, Ollama Cloud,
 - **Incremental across pushes**: a fully covered review records a checkpoint,
   and the next push reviews only the commits since it. Outdated bot threads
   can be resolved automatically (GitHub).
+- **Reviews converge**: nits inline on the first review only, no re-review
+  of an unchanged rebase, and a severity rubric for Important findings
+  ([why](#why-reviews-dont-converge)).
 - **Partial runs are explained**: files OCR could not review and its warnings
   are listed in the summary, with the reason.
 - **Metrics**: webhooks, jobs, reviews, tokens, findings, duration.
@@ -162,6 +165,10 @@ pod's environment.
 | `policy.resolveOutdated` | `OCR_RESOLVE_OUTDATED` | `report` | `false` \| `report` \| `true`; GitHub only |
 | `policy.routeSeverityBelow` | `OCR_ROUTE_SEVERITY_BELOW` | — | findings at or below this severity go to the summary |
 | `policy.routeCategories` | `OCR_ROUTE_CATEGORIES` | — | categories that go to the summary, e.g. `style,documentation` |
+| `policy.nitsFirstRoundOnly` | `OCR_NITS_FIRST_ROUND_ONLY` | `true` | nit threads on the first review only |
+| `policy.skipUnchangedRebase` | `OCR_SKIP_UNCHANGED_REBASE` | `true` | carry the review forward when a rebase left the patch unchanged |
+| `policy.severityRubric` | `OCR_SEVERITY_RUBRIC` | `true` | `true`, `false`, or replacement rubric text |
+| `policy.demoteUnquotedImportant` | `OCR_DEMOTE_UNQUOTED_IMPORTANT` | `false` | post an Important finding that quotes no code as a nit |
 | `policy.commands` | `OCR_COMMANDS` | `/review,/ocr,/open-code-review` | |
 | `policy.allowedAssociations` | `OCR_ALLOWED_ASSOCIATIONS` | `OWNER,MEMBER,COLLABORATOR` | GitHub only |
 | `job.deadlineSeconds` | `OCR_JOB_DEADLINE_SECONDS` | `3600` | activeDeadlineSeconds |
@@ -202,6 +209,33 @@ own outdated, unresolved threads (GraphQL `reviewThreads`) it would resolve. A
 thread with any human reply, or one whose lines a current finding still
 covers, is never touched. Once the reports look right, set it to `"true"`.
 Gitea has no thread-resolution API, so the setting does nothing there.
+
+## Why reviews don't converge
+
+Every push to a PR starts a review, and a model reviewing a diff will nearly
+always find something. Left alone, that has three effects:
+
+- **Each fix draws new nits.** Every round may open up to `maxNits` new nit
+  threads, often on the commit that fixed the last round's findings, so the
+  thread count grows with the number of pushes instead of falling.
+- **Rebases are reviewed again.** Rebasing onto a newer base, or retargeting a
+  stacked PR onto `main` after its lower PR squash-merged, changes every
+  commit id but not the patch. A full re-review re-files the old findings.
+- **"Important" has no bar.** The CLI gives its severity levels no meaning,
+  and the bridge turns high/critical into `Important —` threads that someone
+  has to answer. Without a definition, speculative "this could fail" findings
+  land there.
+
+Four settings address them. The first three are on by default.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `OCR_NITS_FIRST_ROUND_ONLY` | on | The poster counts reviews in the sticky summary (`<!-- ocr-round: N -->`; a summary from before the marker counts as one, the "nothing reviewable" summary as zero). Round 1 posts up to `OCR_MAX_NITS` nits inline. Later rounds post only Important findings inline and list nits in a collapsed *Nits* section of the summary. |
+| `OCR_SKIP_UNCHANGED_REBASE` | on | With a checkpoint, the Job compares `git diff <base>...<head> \| git patch-id --stable` for the checkpoint (against its recorded base) and for the new head (against the current base). If they are equal and non-empty, the model is not run: `post-review.mjs --carry-forward` moves the checkpoint to the new head and notes "Rebased, patch unchanged; previous review carried forward". Any doubt (no checkpoint, a commit that cannot be fetched, no summary to update) falls back to a normal review. `/report` records the run as `carried`. |
+| `OCR_SEVERITY_RUBRIC` | on | Appends a rubric to every rule in the generated rule file, and to a trailing `**` catch-all, because OCR applies only the first matching rule: high/critical only for a defect with a concrete triggering input or state, the wrong result, and a backtick quote of the code path; anything else is medium or low. Any value other than true/false replaces the text. |
+| `OCR_DEMOTE_UNQUOTED_IMPORTANT` | **off** | A backstop in the poster: a high/critical finding whose text has no inline code span is posted as a nit. It is a heuristic, and on prose-heavy repositories or documentation reviews a correct Important finding often quotes no code, so turn it on only where findings are about code. |
+
+Skipping unchanged rebases depends on checkpoints (`policy.checkpoint`).
 
 ## Metrics
 
@@ -254,7 +288,10 @@ npm start         # run the receiver locally (needs env, see values.yaml)
 ```
 
 The receiver and poster are unit-tested against mock GitHub, Gitea and
-Kubernetes servers, plus a Job-spec contract test.
+Kubernetes servers, plus a Job-spec contract test. `run-review.test.mjs` runs
+the Job script against a local bare origin with stub `ocr` and poster binaries
+(unchanged-rebase skip, stacked-PR retarget, incremental range, rubric); it
+needs `git` and `bash`.
 
 ## License
 
