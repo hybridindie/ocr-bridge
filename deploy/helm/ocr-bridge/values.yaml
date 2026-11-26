@@ -9,11 +9,11 @@ fullnameOverride: ""
 image:
   receiver:
     repository: ghcr.io/hybridindie/ocr-receiver
-    tag: "0.5.1"
+    tag: "0.5.2"
     pullPolicy: IfNotPresent
   job:
     repository: ghcr.io/hybridindie/ocr-job
-    tag: "1.14.3-bridge0.5.1"
+    tag: "1.14.4-bridge0.5.2"
     pullPolicy: IfNotPresent
   # Image pull secrets for private registries, e.g. [{name: ghcr-pull}]
   pullSecrets: []
@@ -158,6 +158,11 @@ policy:
   # span) as a nit. Off by default: it is a heuristic, and on prose-heavy repos
   # or documentation reviews a correct Important finding often quotes nothing.
   demoteUnquotedImportant: false
+  # Refuse a push that changes .gitattributes or .gitmodules, unless this is
+  # true: those files let a PR mark code binary or attach a diff driver, which
+  # hides its own changes from the review and from code_search. .gitignore
+  # changes only warn.
+  allowGitMetadataChanges: false
   commands: "/review,/ocr,/open-code-review"
   allowedAssociations: "OWNER,MEMBER,COLLABORATOR"
 

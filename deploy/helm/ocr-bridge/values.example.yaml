@@ -9,10 +9,10 @@
 image:
   receiver:
     repository: ghcr.io/your-org/ocr-receiver
-    tag: "0.5.1"
+    tag: "0.5.2"
   job:
     repository: ghcr.io/your-org/ocr-job
-    tag: "1.14.3-bridge0.5.1"
+    tag: "1.14.4-bridge0.5.2"
 
 providers:
   github:

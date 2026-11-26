@@ -320,6 +320,7 @@ export function buildJob({
     'OCR_MAX_TOOLS', 'OCR_EXCLUDE', 'OCR_ROUTE_SEVERITY_BELOW', 'OCR_ROUTE_CATEGORIES',
     'OCR_RESOLVE_OUTDATED', 'OCR_CHECKPOINT', 'OCR_NITS_FIRST_ROUND_ONLY',
     'OCR_SKIP_UNCHANGED_REBASE', 'OCR_SEVERITY_RUBRIC', 'OCR_DEMOTE_UNQUOTED_IMPORTANT',
+    'OCR_ALLOW_GIT_METADATA_CHANGES',
   ]) {
     const value = process.env[key];
     if (value) env.push({ name: key, value });

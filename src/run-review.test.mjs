@@ -252,3 +252,145 @@ test('git wrapper retries an uncompilable PCRE grep as a fixed string', () => {
   });
   assert.equal(other.stdout.trim(), head);
 });
+
+test('a force-push between delivery and fetch reviews the announced head', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'pr');
+  const p1 = commit(work, 'src/a.rs', 'fn a() {}\n', 'pr change');
+  // A force-push replaces the branch: p2 is a sibling of p1, not its child.
+  git(work, 'checkout', '-q', '-b', 'pr2', m1);
+  const p2 = commit(work, 'src/a.rs', 'fn a() { b }\n', 'force-push');
+  git(work, 'checkout', '-q', 'pr');
+  // The PR ref moved on; p1 stays fetchable by id, as on GitHub/Gitea.
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p2, 'refs/keep/p1': p1 });
+
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.reviews.length, 1);
+  assert.match(result.reviews[0], new RegExp(`--to ${p1} `));
+  assert.doesNotMatch(result.reviews[0], /--to origin\/pr-7/);
+  assert.equal(result.posts.length, 1);
+  assert.equal(result.posts[0].head, p1);
+});
+
+test('a head that cannot be fetched is a no-op, not a review of another commit', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'pr');
+  const p1 = commit(work, 'src/a.rs', 'fn a() {}\n', 'pr change');
+  git(work, 'checkout', '-q', '-b', 'pr2', m1);
+  const p2 = commit(work, 'src/a.rs', 'fn a() { b }\n', 'force-push');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p2 });
+  // p1 is unreachable and the server refuses to serve it by id.
+  git(path.join(root, 'origin.git'), 'config', 'uploadpack.allowAnySHA1InWant', 'false');
+
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /head moved/);
+  assert.deepEqual(result.reviews, []);
+  assert.deepEqual(result.posts, []);
+});
+
+test('a PR that changes git diff policy is refused unless allowed', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'pr');
+  const p1 = commit(work, '.gitattributes', '*.rs binary\n', 'hide rust files');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p1 });
+
+  const blocked = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /changes git diff policy: \.gitattributes/);
+  assert.deepEqual(blocked.reviews, []);
+
+  reset(root);
+  const allowed = run({ BASE_REF: 'main', HEAD_SHA: p1, OCR_ALLOW_GIT_METADATA_CHANGES: 'true' });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.equal(allowed.reviews.length, 1);
+});
+
+test('a .gitignore change is a warning, not a refusal', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'pr');
+  const p1 = commit(work, '.gitignore', 'build/\n', 'ignore build output');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p1 });
+
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /warning: the PR changes \.gitignore/);
+  assert.equal(result.reviews.length, 1);
+});
+
+test('an ambiguous merge-base is refused', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  commit(work, 'base.txt', 'zero\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'x');
+  const c1 = commit(work, 'x.txt', 'x\n', 'x');
+  git(work, 'checkout', '-q', 'main');
+  const c2 = commit(work, 'y.txt', 'y\n', 'y');
+  // Criss-cross: x merges y, y merges x's commit; both are merge bases.
+  git(work, 'checkout', '-q', 'x');
+  git(work, 'merge', '-q', '--no-edit', c2);
+  const m1 = git(work, 'rev-parse', 'HEAD');
+  git(work, 'checkout', '-q', '-b', 'y', c2);
+  git(work, 'merge', '-q', '--no-edit', c1);
+  const m2 = git(work, 'rev-parse', 'HEAD');
+  assert.equal(git(work, 'merge-base', '--all', m1, m2).split('\n').length, 2);
+  publish({ 'refs/heads/main': m2, 'refs/pull/7/head': m1 });
+
+  const result = run({ BASE_REF: 'main', HEAD_SHA: m1 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /2 merge bases/);
+  assert.deepEqual(result.reviews, []);
+});
+
+test('a nested .gitattributes change is refused too', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'pr');
+  const p1 = commit(work, 'nested/.gitattributes', '*.rs binary\n', 'hide nested rust files');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p1 });
+
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /nested\/\.gitattributes/);
+  assert.deepEqual(result.reviews, []);
+});
+
+test('a nested .gitignore change warns too', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'pr');
+  const p1 = commit(work, 'src/.gitignore', 'build/\n', 'ignore nested build output');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p1 });
+
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /warning: the PR changes \.gitignore/);
+  assert.equal(result.reviews.length, 1, 'the review should still run');
+  assert.equal(result.posts.length, 1);
+});
+
+test('unrelated histories are refused with their own message', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '--orphan', 'orphan');
+  git(work, 'rm', '-rq', '--cached', '.');
+  fs.rmSync(path.join(work, 'base.txt'), { force: true });
+  const p1 = commit(work, 'other.txt', 'other\n', 'orphan root');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p1 });
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /no common ancestor/);
+  assert.deepEqual(result.reviews, []);
+});
