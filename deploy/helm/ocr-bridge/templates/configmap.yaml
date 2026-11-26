@@ -38,6 +38,7 @@ data:
   OCR_SKIP_UNCHANGED_REBASE: {{ .Values.policy.skipUnchangedRebase | quote }}
   OCR_SEVERITY_RUBRIC: {{ .Values.policy.severityRubric | quote }}
   OCR_DEMOTE_UNQUOTED_IMPORTANT: {{ .Values.policy.demoteUnquotedImportant | quote }}
+  OCR_ALLOW_GIT_METADATA_CHANGES: {{ .Values.policy.allowGitMetadataChanges | quote }}
   OCR_COMMANDS: {{ .Values.policy.commands | quote }}
   OCR_ALLOWED_ASSOCIATIONS: {{ .Values.policy.allowedAssociations | quote }}
   OCR_PROVIDERS: {{ include "ocr-bridge.providers" . | quote }}

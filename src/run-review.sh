@@ -87,10 +87,23 @@ BASE_SHA="$(git rev-parse "origin/${BASE_REF}")"
 # The superseded commit normally stays fetchable by id after a force-push; if it
 # does not, this Job is a no-op rather than a review of the wrong commit.
 if ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
-  git fetch -q --no-tags origin "${HEAD_SHA}" >/dev/null 2>&1 || true
+  # The announced commit is missing: either a force-push replaced it, or this
+  # fetch hit a transient error. The base and PR-ref fetches above already
+  # proved the remote is reachable, so retry briefly before concluding.
+  for attempt in 1 2 3; do
+    git fetch -q --no-tags origin "${HEAD_SHA}" 2>"${TMPD}/head-fetch.err" && break
+    [ "$attempt" -lt 3 ] && sleep "$attempt"
+  done
 fi
 if ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
-  log "head moved: ${HEAD_SHA:0:7} is no longer fetchable; a newer delivery owns this review"
+  if [ "$(git rev-parse "refs/remotes/origin/pr-${PR_NUMBER}")" = "$HEAD_SHA" ]; then
+    # Unreachable for a reason other than a moved ref (auth, transport, a forge
+    # that refuses any-SHA requests): a retry of the Job is the only way to
+    # review this head, so fail instead of silently completing.
+    log "cannot fetch announced head ${HEAD_SHA:0:7}: $(tr '\n' ' ' < "${TMPD}/head-fetch.err" | tail -c 300)"
+    exit 1
+  fi
+  log "head moved: ${HEAD_SHA:0:7} is no longer the PR head; a newer delivery owns this review"
   exit 0
 fi
 REVIEWED_HEAD="$(git rev-parse "${HEAD_SHA}^{commit}")"
@@ -105,7 +118,10 @@ is_on() { case "${1:-}" in true|1|yes|TRUE|True) return 0 ;; *) return 1 ;; esac
 # silently picks one, so the reviewed patch would not be the PR's. Refuse rather
 # than review an ambiguous range.
 MERGE_BASES="$(git merge-base --all "$BASE_SHA" "$REVIEWED_HEAD" | wc -l | tr -d ' ')"
-if [ "$MERGE_BASES" != "1" ]; then
+if [ "$MERGE_BASES" = "0" ]; then
+  log "refusing: ${BASE_SHA:0:7} and ${REVIEWED_HEAD:0:7} have no common ancestor (unrelated histories)"
+  exit 1
+elif [ "$MERGE_BASES" != "1" ]; then
   log "refusing: ${BASE_SHA:0:7}..${REVIEWED_HEAD:0:7} has ${MERGE_BASES} merge bases; the patch is ambiguous"
   exit 1
 fi
@@ -121,7 +137,7 @@ if [ -n "$GIT_META" ] && ! is_on "${OCR_ALLOW_GIT_METADATA_CHANGES:-false}"; the
   log "set OCR_ALLOW_GIT_METADATA_CHANGES=true to review it anyway"
   exit 1
 fi
-GIT_IGNORE="$(git diff --name-only --no-renames "${BASE_SHA}...${REVIEWED_HEAD}" -- .gitignore 2>/dev/null || true)"
+GIT_IGNORE="$(git diff --name-only --no-renames "${BASE_SHA}...${REVIEWED_HEAD}" -- ':(glob)**/.gitignore' 2>/dev/null || true)"
 if [ -n "$GIT_IGNORE" ]; then
   log "warning: the PR changes .gitignore; untracked files are not reviewed"
 fi

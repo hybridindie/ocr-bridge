@@ -350,3 +350,45 @@ test('an ambiguous merge-base is refused', () => {
   assert.match(result.stderr, /2 merge bases/);
   assert.deepEqual(result.reviews, []);
 });
+
+test('a nested .gitattributes change is refused too', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'pr');
+  const p1 = commit(work, 'nested/.gitattributes', '*.rs binary\n', 'hide nested rust files');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p1 });
+
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /nested\/\.gitattributes/);
+  assert.deepEqual(result.reviews, []);
+});
+
+test('a nested .gitignore change warns too', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '-b', 'pr');
+  const p1 = commit(work, 'src/.gitignore', 'build/\n', 'ignore nested build output');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p1 });
+
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /warning: the PR changes \.gitignore/);
+});
+
+test('unrelated histories are refused with their own message', () => {
+  const { root, work, publish, run } = setup();
+  fs.mkdirSync(path.join(root, 'tmp'));
+  const m1 = commit(work, 'base.txt', 'one\n', 'base');
+  git(work, 'checkout', '-q', '--orphan', 'orphan');
+  git(work, 'rm', '-rq', '--cached', '.');
+  fs.rmSync(path.join(work, 'base.txt'), { force: true });
+  const p1 = commit(work, 'other.txt', 'other\n', 'orphan root');
+  publish({ 'refs/heads/main': m1, 'refs/pull/7/head': p1 });
+  const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /no common ancestor/);
+  assert.deepEqual(result.reviews, []);
+});
