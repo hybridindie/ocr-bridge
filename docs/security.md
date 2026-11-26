@@ -46,6 +46,10 @@
 
 - The Job image sets `OCR_NO_UPDATE=1`; the CLI must not install packages at
   runtime.
+- The Job pins the review to the webhook's head SHA and refuses a PR that
+  changes `.gitattributes`/`.gitmodules` (a diff can otherwise hide its own
+  changes), unless `OCR_ALLOW_GIT_METADATA_CHANGES=true`. See
+  [Review integrity](../README.md#review-integrity-pinned-head-unique-merge-base-no-self-hidden-diffs).
 
 ## Endpoint exposure
 

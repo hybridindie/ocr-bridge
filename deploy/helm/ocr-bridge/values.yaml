@@ -13,7 +13,7 @@ image:
     pullPolicy: IfNotPresent
   job:
     repository: ghcr.io/hybridindie/ocr-job
-    tag: "1.14.3-bridge0.5.1"
+    tag: "1.14.4-bridge0.5.1"
     pullPolicy: IfNotPresent
   # Image pull secrets for private registries, e.g. [{name: ghcr-pull}]
   pullSecrets: []

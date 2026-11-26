@@ -9,7 +9,8 @@
 #           OCR_MAX_TOOLS, OCR_EXCLUDE, OCR_ROUTE_SEVERITY_BELOW, OCR_ROUTE_CATEGORIES,
 #           OCR_RESOLVE_OUTDATED, OCR_CHECKPOINT, CHECKPOINT_SHA, CHECKPOINT_BASE_SHA,
 #           OCR_SKIP_UNCHANGED_REBASE, OCR_SEVERITY_RUBRIC, OCR_NITS_FIRST_ROUND_ONLY,
-#           OCR_DEMOTE_UNQUOTED_IMPORTANT, OCR_TMPDIR, OCR_WORKDIR, OCR_POSTER.
+#           OCR_DEMOTE_UNQUOTED_IMPORTANT, OCR_ALLOW_GIT_METADATA_CHANGES,
+#           OCR_TMPDIR, OCR_WORKDIR, OCR_POSTER.
 set -uo pipefail
 
 log() { printf '[ocr-job] %s\n' "$*" >&2; }
@@ -77,14 +78,53 @@ if ! git fetch -q --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/or
   log "failed to fetch refs/pull/${PR_NUMBER}/head"
   exit 1
 fi
-git checkout -q "refs/remotes/origin/pr-${PR_NUMBER}"
-
 BASE_SHA="$(git rev-parse "origin/${BASE_REF}")"
-REVIEWED_HEAD="$(git rev-parse "refs/remotes/origin/pr-${PR_NUMBER}")"
+
+# Pin the review to the head the webhook announced. `refs/pull/<n>/head` can
+# already point at a newer commit when a force-push lands between delivery and
+# fetch, and reviewing that would attach a different snapshot to this Job's SHA
+# and to the checkpoint written into its summary (a newer push has its own Job).
+# The superseded commit normally stays fetchable by id after a force-push; if it
+# does not, this Job is a no-op rather than a review of the wrong commit.
+if ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
+  git fetch -q --no-tags origin "${HEAD_SHA}" >/dev/null 2>&1 || true
+fi
+if ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
+  log "head moved: ${HEAD_SHA:0:7} is no longer fetchable; a newer delivery owns this review"
+  exit 0
+fi
+REVIEWED_HEAD="$(git rev-parse "${HEAD_SHA}^{commit}")"
+git checkout -q --detach "$REVIEWED_HEAD"
 export OCR_BASE_SHA="$BASE_SHA"
 export OCR_REVIEWED_HEAD="$REVIEWED_HEAD"
 
 is_off() { case "${1:-}" in false|0|no|FALSE|False) return 0 ;; *) return 1 ;; esac; }
+is_on() { case "${1:-}" in true|1|yes|TRUE|True) return 0 ;; *) return 1 ;; esac; }
+
+# A criss-cross history has more than one merge base and `git diff base...head`
+# silently picks one, so the reviewed patch would not be the PR's. Refuse rather
+# than review an ambiguous range.
+MERGE_BASES="$(git merge-base --all "$BASE_SHA" "$REVIEWED_HEAD" | wc -l | tr -d ' ')"
+if [ "$MERGE_BASES" != "1" ]; then
+  log "refusing: ${BASE_SHA:0:7}..${REVIEWED_HEAD:0:7} has ${MERGE_BASES} merge bases; the patch is ambiguous"
+  exit 1
+fi
+
+# A PR that changes git's diff policy can hide its own changes: `.gitattributes`
+# can mark a file binary or attach a diff driver, and `.gitmodules` can replace a
+# directory with a pointer the review cannot see into. Refuse unless explicitly
+# allowed. `.gitignore` only affects untracked files, so it is a warning.
+GIT_META="$(git diff --name-only --no-renames "${BASE_SHA}...${REVIEWED_HEAD}" -- \
+  .gitattributes ':(glob)**/.gitattributes' .gitmodules 2>/dev/null || true)"
+if [ -n "$GIT_META" ] && ! is_on "${OCR_ALLOW_GIT_METADATA_CHANGES:-false}"; then
+  log "refusing: the PR changes git diff policy: $(printf '%s' "$GIT_META" | tr '\n' ' ')"
+  log "set OCR_ALLOW_GIT_METADATA_CHANGES=true to review it anyway"
+  exit 1
+fi
+GIT_IGNORE="$(git diff --name-only --no-renames "${BASE_SHA}...${REVIEWED_HEAD}" -- .gitignore 2>/dev/null || true)"
+if [ -n "$GIT_IGNORE" ]; then
+  log "warning: the PR changes .gitignore; untracked files are not reviewed"
+fi
 
 # The patch a PR proposes: base...head (merge-base to head) through
 # `git patch-id --stable`, which ignores commit ids, messages, line numbers and
@@ -145,7 +185,7 @@ if [ -n "${CHECKPOINT_SHA:-}" ] && [ -n "${CHECKPOINT_BASE_SHA:-}" ] \
   fi
 fi
 
-log "reviewing ${REPO}#${PR_NUMBER} (${FROM_REF}...${HEAD_SHA})"
+log "reviewing ${REPO}#${PR_NUMBER} (${FROM_REF}...${REVIEWED_HEAD})"
 
 # Rule policy:
 #  - use the *base* ref's .opencodereview/rule.json, never the PR head, so a PR
@@ -237,7 +277,7 @@ TUNING_ARGS=()
 do_review() {
   ocr review \
     --from "${FROM_REF}" \
-    --to "origin/pr-${PR_NUMBER}" \
+    --to "${REVIEWED_HEAD}" \
     --format json \
     --audience agent \
     --output "$TMPD/result.json" \

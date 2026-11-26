@@ -57,13 +57,13 @@ webhook.
 
 ### 1. Build and publish the images
 
-Published defaults follow the chart version: `ocr-receiver:<chart>` and `ocr-job:<ocr-cli>-bridge<chart>` (for example `0.5.1` and `1.14.3-bridge0.5.1`), so a public build never shares a tag with a private build pushed to the same registry. Build your own with the commands below and set `image.*.repository`/`tag`.
+Published defaults follow the chart version: `ocr-receiver:<chart>` and `ocr-job:<ocr-cli>-bridge<chart>` (for example `0.5.1` and `1.14.4-bridge0.5.1`), so a public build never shares a tag with a private build pushed to the same registry. Build your own with the commands below and set `image.*.repository`/`tag`.
 
 ```bash
 podman build -t ghcr.io/you/ocr-receiver:0.5.1 -f Dockerfile.receiver .
-podman build -t ghcr.io/you/ocr-job:1.14.3-bridge0.5.1 -f Dockerfile.job .
+podman build -t ghcr.io/you/ocr-job:1.14.4-bridge0.5.1 -f Dockerfile.job .
 podman push ghcr.io/you/ocr-receiver:0.5.1
-podman push ghcr.io/you/ocr-job:1.14.3-bridge0.5.1
+podman push ghcr.io/you/ocr-job:1.14.4-bridge0.5.1
 ```
 
 `ocr-job` pins the CLI (`ARG OCR_VERSION`); bump the tag with it. Add
@@ -205,6 +205,31 @@ so a PR that takes five pushes pays for five full reviews.
 
 Fail-closed is the point: a force-push, a merge from the base branch, a
 partial run or a missing marker all fall back to a full review.
+
+### Review integrity: pinned head, unique merge-base, no self-hidden diffs
+
+Ported from OpenCodeReview 1.14.4's `review_pr` skill
+([alibaba/open-code-review#2038](https://github.com/alibaba/open-code-review/pull/2038)).
+All three run in the Job before the model:
+
+- **Pinned head.** The Job reviews the webhook's `HEAD_SHA`, not whatever
+  `refs/pull/<n>/head` points at when it runs. A force-push between delivery and
+  fetch would otherwise attach a different snapshot to this Job's SHA and to the
+  checkpoint in its summary, while a newer delivery already owns that review. If
+  the announced commit is unreachable and the server refuses it by id, the Job
+  logs `head moved: …` and exits 0 as a no-op.
+- **Unique merge-base.** On a criss-cross history `git diff base...head` silently
+  picks one merge base, so the reviewed patch is not the PR's. The Job refuses
+  with the base/head pair in the log.
+- **No self-hidden diffs.** `.gitattributes` and `.gitmodules` let a PR mark a
+  file binary, attach a diff driver, or replace a directory with a pointer the
+  review cannot see into. The Job refuses and names the paths;
+  `OCR_ALLOW_GIT_METADATA_CHANGES=true` overrides it for repositories that
+  legitimately maintain those files. `.gitignore` only warns (it affects
+  untracked files, not the diff).
+
+A refusal exits 1 and posts nothing, so it surfaces as a failed Job instead of a
+review of a doctored diff. `src/run-review.test.mjs` covers all four behaviours.
 
 ### Resolving outdated threads
 

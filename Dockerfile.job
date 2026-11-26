@@ -9,7 +9,7 @@
 # git again.
 FROM node:24.22.1-trixie-slim
 
-ARG OCR_VERSION=1.14.3
+ARG OCR_VERSION=1.14.4
 ARG MIN_GIT_VERSION=2.41
 
 # Only git + CA roots are needed on top of the Node base: the CLI is an npm
