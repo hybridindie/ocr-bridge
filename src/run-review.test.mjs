@@ -376,6 +376,8 @@ test('a nested .gitignore change warns too', () => {
   const result = run({ BASE_REF: 'main', HEAD_SHA: p1 });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /warning: the PR changes \.gitignore/);
+  assert.equal(result.reviews.length, 1, 'the review should still run');
+  assert.equal(result.posts.length, 1);
 });
 
 test('unrelated histories are refused with their own message', () => {
